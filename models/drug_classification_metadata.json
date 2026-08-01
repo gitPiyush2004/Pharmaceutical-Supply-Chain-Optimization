@@ -1,0 +1,476 @@
+{
+  "artifact_name": "drug_classification",
+  "task": "drug_classification",
+  "model_name": "decision_tree",
+  "params": {
+    "criterion": "gini",
+    "max_depth": 4,
+    "min_samples_split": 2
+  },
+  "all_best_params": {
+    "decision_tree": {
+      "criterion": "gini",
+      "max_depth": 4,
+      "min_samples_split": 2
+    },
+    "random_forest": {
+      "max_depth": 4,
+      "min_samples_leaf": 1,
+      "n_estimators": 200
+    },
+    "xgboost": {
+      "learning_rate": 0.1,
+      "max_depth": 3,
+      "n_estimators": 200,
+      "subsample": 0.8
+    }
+  },
+  "metrics": {
+    "accuracy": 0.98,
+    "f1_macro": 0.9877446808510637,
+    "f1_weighted": 0.9798127659574467,
+    "precision_macro": 0.9916666666666668,
+    "recall_macro": 0.9846153846153847
+  },
+  "roc_auc_ovr": 0.9886039886039886,
+  "cv_folds": 5,
+  "cv_scoring": "f1_macro",
+  "cv_best_score": 1.0,
+  "comparison": [
+    {
+      "model": "decision_tree",
+      "cv_mean": 1.0,
+      "cv_std": 0.0,
+      "test_accuracy": 0.98,
+      "test_f1_macro": 0.9877,
+      "test_precision": 0.9917,
+      "test_recall": 0.9846,
+      "fit_seconds": 7.81
+    },
+    {
+      "model": "random_forest",
+      "cv_mean": 0.9863,
+      "cv_std": 0.0274,
+      "test_accuracy": 1.0,
+      "test_f1_macro": 1.0,
+      "test_precision": 1.0,
+      "test_recall": 1.0,
+      "fit_seconds": 8.3
+    },
+    {
+      "model": "xgboost",
+      "cv_mean": 0.9863,
+      "cv_std": 0.0274,
+      "test_accuracy": 0.98,
+      "test_f1_macro": 0.9596,
+      "test_precision": 0.96,
+      "test_recall": 0.9667,
+      "fit_seconds": 5.43
+    }
+  ],
+  "features": [
+    "Age",
+    "Na_to_K",
+    "bp_risk_score",
+    "cholesterol_risk",
+    "combined_risk_score",
+    "high_na_to_k",
+    "Sex",
+    "BP",
+    "Cholesterol",
+    "age_group",
+    "na_to_k_band"
+  ],
+  "numeric_features": [
+    "Age",
+    "Na_to_K",
+    "bp_risk_score",
+    "cholesterol_risk",
+    "combined_risk_score",
+    "high_na_to_k"
+  ],
+  "categorical_features": [
+    "Sex",
+    "BP",
+    "Cholesterol",
+    "age_group",
+    "na_to_k_band"
+  ],
+  "target": "Drug",
+  "class_labels": [
+    "DrugY",
+    "drugA",
+    "drugB",
+    "drugC",
+    "drugX"
+  ],
+  "top_features": [
+    {
+      "feature": "Na_to_K",
+      "importance": 0.47691687827366164
+    },
+    {
+      "feature": "bp_risk_score",
+      "importance": 0.20964667096672976
+    },
+    {
+      "feature": "Age",
+      "importance": 0.13512260389206093
+    },
+    {
+      "feature": "Cholesterol_NORMAL",
+      "importance": 0.12411714294157629
+    },
+    {
+      "feature": "BP_NORMAL",
+      "importance": 0.0541967039259713
+    },
+    {
+      "feature": "high_na_to_k",
+      "importance": 0.0
+    },
+    {
+      "feature": "Sex_F",
+      "importance": 0.0
+    },
+    {
+      "feature": "Sex_M",
+      "importance": 0.0
+    },
+    {
+      "feature": "BP_HIGH",
+      "importance": 0.0
+    },
+    {
+      "feature": "BP_LOW",
+      "importance": 0.0
+    }
+  ],
+  "feature_importance": [
+    {
+      "feature": "Na_to_K",
+      "importance": 0.47691687827366164
+    },
+    {
+      "feature": "bp_risk_score",
+      "importance": 0.20964667096672976
+    },
+    {
+      "feature": "Age",
+      "importance": 0.13512260389206093
+    },
+    {
+      "feature": "Cholesterol_NORMAL",
+      "importance": 0.12411714294157629
+    },
+    {
+      "feature": "BP_NORMAL",
+      "importance": 0.0541967039259713
+    },
+    {
+      "feature": "high_na_to_k",
+      "importance": 0.0
+    },
+    {
+      "feature": "Sex_F",
+      "importance": 0.0
+    },
+    {
+      "feature": "Sex_M",
+      "importance": 0.0
+    },
+    {
+      "feature": "BP_HIGH",
+      "importance": 0.0
+    },
+    {
+      "feature": "BP_LOW",
+      "importance": 0.0
+    },
+    {
+      "feature": "combined_risk_score",
+      "importance": 0.0
+    },
+    {
+      "feature": "Cholesterol_HIGH",
+      "importance": 0.0
+    },
+    {
+      "feature": "cholesterol_risk",
+      "importance": 0.0
+    },
+    {
+      "feature": "age_group_30-45",
+      "importance": 0.0
+    },
+    {
+      "feature": "age_group_45-60",
+      "importance": 0.0
+    },
+    {
+      "feature": "age_group_60+",
+      "importance": 0.0
+    },
+    {
+      "feature": "age_group_<30",
+      "importance": 0.0
+    },
+    {
+      "feature": "na_to_k_band_High",
+      "importance": 0.0
+    },
+    {
+      "feature": "na_to_k_band_Low",
+      "importance": 0.0
+    },
+    {
+      "feature": "na_to_k_band_Normal",
+      "importance": 0.0
+    }
+  ],
+  "confusion_matrix": {
+    "labels": [
+      "predicted: DrugY",
+      "predicted: drugA",
+      "predicted: drugB",
+      "predicted: drugC",
+      "predicted: drugX"
+    ],
+    "index": [
+      "actual: DrugY",
+      "actual: drugA",
+      "actual: drugB",
+      "actual: drugC",
+      "actual: drugX"
+    ],
+    "values": [
+      [
+        23,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        6,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        4,
+        0
+      ],
+      [
+        1,
+        0,
+        0,
+        0,
+        12
+      ]
+    ]
+  },
+  "classification_report": {
+    "DrugY": {
+      "precision": 0.9583333333333334,
+      "recall": 1.0,
+      "f1-score": 0.9787234042553191,
+      "support": 23.0
+    },
+    "drugA": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 6.0
+    },
+    "drugB": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 4.0
+    },
+    "drugC": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 4.0
+    },
+    "drugX": {
+      "precision": 1.0,
+      "recall": 0.9230769230769231,
+      "f1-score": 0.96,
+      "support": 13.0
+    },
+    "accuracy": {
+      "precision": 0.98,
+      "recall": 0.98,
+      "f1-score": 0.98,
+      "support": 0.98
+    },
+    "macro avg": {
+      "precision": 0.9916666666666668,
+      "recall": 0.9846153846153847,
+      "f1-score": 0.9877446808510637,
+      "support": 50.0
+    },
+    "weighted avg": {
+      "precision": 0.9808333333333334,
+      "recall": 0.98,
+      "f1-score": 0.9798127659574467,
+      "support": 50.0
+    }
+  },
+  "per_class_roc": {
+    "DrugY": {
+      "fpr": [
+        0.0,
+        0.037037037037037035,
+        1.0
+      ],
+      "tpr": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "auc": 0.9814814814814815
+    },
+    "drugA": {
+      "fpr": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "tpr": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "auc": 1.0
+    },
+    "drugB": {
+      "fpr": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "tpr": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "auc": 1.0
+    },
+    "drugC": {
+      "fpr": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "tpr": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "auc": 1.0
+    },
+    "drugX": {
+      "fpr": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "tpr": [
+        0.0,
+        0.9230769230769231,
+        1.0
+      ],
+      "auc": 0.9615384615384616
+    }
+  },
+  "pr_curves": {
+    "DrugY": {
+      "precision": [
+        0.46,
+        0.9583333333333334,
+        1.0
+      ],
+      "recall": [
+        1.0,
+        1.0,
+        0.0
+      ],
+      "ap": 0.9583333333333334
+    },
+    "drugA": {
+      "precision": [
+        0.12,
+        1.0,
+        1.0
+      ],
+      "recall": [
+        1.0,
+        1.0,
+        0.0
+      ],
+      "ap": 1.0
+    },
+    "drugB": {
+      "precision": [
+        0.08,
+        1.0,
+        1.0
+      ],
+      "recall": [
+        1.0,
+        1.0,
+        0.0
+      ],
+      "ap": 1.0
+    },
+    "drugC": {
+      "precision": [
+        0.08,
+        1.0,
+        1.0
+      ],
+      "recall": [
+        1.0,
+        1.0,
+        0.0
+      ],
+      "ap": 1.0
+    },
+    "drugX": {
+      "precision": [
+        0.26,
+        1.0,
+        1.0
+      ],
+      "recall": [
+        1.0,
+        0.9230769230769231,
+        0.0
+      ],
+      "ap": 0.9430769230769231
+    }
+  },
+  "row_count": 200,
+  "train_rows": 150,
+  "test_rows": 50,
+  "test_size": 0.25,
+  "random_seed": 42,
+  "trained_at": "2026-08-01T21:18:34+00:00",
+  "platform_version": "1.0.0",
+  "feature_engineering": {}
+}

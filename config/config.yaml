@@ -1,0 +1,387 @@
+# =============================================================================
+# Pharmaceutical Supply Chain Optimization - Central Configuration
+# -----------------------------------------------------------------------------
+# Every tunable constant in the platform lives here. No magic numbers in code.
+# Modules read this via `src.config.get_config()`.
+# =============================================================================
+
+project:
+  name: "Pharmaceutical Supply Chain Optimization"
+  short_name: "PharmaChain Analytics"
+  version: "1.0.0"
+  author: "Piyush Bhatia"
+  random_seed: 42
+
+# -----------------------------------------------------------------------------
+# Filesystem layout (all paths are relative to the repository root)
+# -----------------------------------------------------------------------------
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  data_external: "data/external"
+  models: "models"
+  reports: "reports"
+  figures: "reports/figures"
+  logs: "logs"
+  database: "data/processed/pharma_supply_chain.db"
+
+datasets:
+  drug200: "data/raw/drug200.csv"
+  batches: "data/raw/supply_chain_batches.csv"
+  shipments: "data/raw/supply_chain_shipments.csv"
+  inventory: "data/raw/supply_chain_inventory.csv"
+  demand: "data/raw/supply_chain_demand.csv"
+  suppliers: "data/raw/dim_suppliers.csv"
+  warehouses: "data/raw/dim_warehouses.csv"
+  drugs: "data/raw/dim_drugs.csv"
+
+# -----------------------------------------------------------------------------
+# Synthetic data generation
+# The generator is deterministic: same seed -> byte-identical datasets.
+# -----------------------------------------------------------------------------
+generation:
+  start_date: "2023-01-01"
+  end_date: "2025-12-31"
+  n_batches: 2400
+  # Stage-to-stage yield (fraction of units surviving into the next stage).
+  # Calibrated against published pharma manufacturing benchmarks: quality
+  # testing is the dominant unit-loss stage, patient uptake the dominant
+  # commercial-loss stage.
+  stage_yield:
+    procurement_to_manufacturing: 0.97
+    manufacturing_to_quality: 0.95
+    quality_to_packaging: 0.92
+    packaging_to_warehouse: 0.99
+    warehouse_to_distributor: 0.94
+    distributor_to_pharmacy: 0.96
+    pharmacy_to_patient: 0.88
+  # Mean / standard deviation of the dwell time (days) inside each stage.
+  stage_delay_days:
+    Procurement:      {mean: 21, sd: 7}
+    Manufacturing:    {mean: 11, sd: 3}
+    Quality Testing:  {mean: 19, sd: 6}   # regulatory QC release - time bottleneck
+    Packaging:        {mean: 4,  sd: 1.5}
+    Warehouse:        {mean: 40, sd: 18}   # finished goods hold weeks-to-months of cover
+    Distributor:      {mean: 6,  sd: 2.5}
+    Hospital/Pharmacy: {mean: 5,  sd: 2}
+    Patient:          {mean: 7,  sd: 4}
+  demand:
+    base_units_per_month: 480000
+    annual_growth_rate: 0.08
+    seasonal_amplitude: 0.16     # +/-16% yearly seasonality
+    noise_sd: 0.05
+  # -------------------------------------------------------------------------
+  # Deliberate data quality defects injected into the RAW (bronze) extract.
+  # Real ERP/WMS/LIMS extracts are never clean: IoT sensors drop out, ERP
+  # double-posts batch records, and free-text region fields drift. The raw
+  # layer reproduces those defects so the data quality module has genuine
+  # problems to detect and the cleaning layer has genuine work to do.
+  # Set `enabled: false` to emit a pristine extract instead.
+  # -------------------------------------------------------------------------
+  quality_issues:
+    enabled: true
+    missing:
+      storage_temp_c: 0.055        # cold-chain logger dropout
+      storage_humidity_pct: 0.048  # hygrometer dropout
+      supplier_reliability: 0.030  # vendor master not yet synced
+      actual_transit_days: 0.035   # carrier EDI message never received
+      units_on_hand: 0.025         # cycle count not posted
+    duplicate_row_rate: 0.012      # ERP double-posting of batch records
+    invalid_category_rate: 0.045   # free-text region entry drift
+    region_aliases:                # dirty value -> canonical value
+      "N. America": "North America"
+      "north america": "North America"
+      "NORTH AMERICA": "North America"
+      "Europe ": "Europe"
+      "EU": "Europe"
+      "APAC": "Asia-Pacific"
+      "asia pacific": "Asia-Pacific"
+      "LATAM": "Latin America"
+      "MEA": "Middle East & Africa"
+    impossible_value_rate: 0.015   # negative durations, potency above 100%
+    whitespace_rate: 0.030         # trailing spaces from CSV exports
+
+# -----------------------------------------------------------------------------
+# Supply chain funnel definition (ordered - order defines the funnel)
+# -----------------------------------------------------------------------------
+funnel:
+  stages:
+    - Procurement
+    - Manufacturing
+    - Quality Testing
+    - Packaging
+    - Warehouse
+    - Distributor
+    - Hospital/Pharmacy
+    - Patient
+  unit_columns:
+    Procurement: units_procured
+    Manufacturing: units_manufactured
+    Quality Testing: units_qa_passed
+    Packaging: units_packaged
+    Warehouse: units_warehoused
+    Distributor: units_distributed
+    Hospital/Pharmacy: units_delivered
+    Patient: units_dispensed
+  date_columns:
+    Procurement: date_procurement
+    Manufacturing: date_manufacturing
+    Quality Testing: date_quality
+    Packaging: date_packaging
+    Warehouse: date_warehouse
+    Distributor: date_distributor
+    Hospital/Pharmacy: date_pharmacy
+    Patient: date_patient
+  # A stage is flagged as a bottleneck when it breaches either threshold.
+  bottleneck:
+    dropoff_pct_threshold: 6.0
+    delay_days_threshold: 15.0
+
+# -----------------------------------------------------------------------------
+# Data quality scoring - weights must sum to 1.0
+# -----------------------------------------------------------------------------
+data_quality:
+  weights:
+    completeness: 0.30
+    uniqueness: 0.20
+    validity: 0.25
+    consistency: 0.15
+    accuracy: 0.10
+  outlier_method: "iqr"      # iqr | zscore
+  iqr_multiplier: 1.5
+  zscore_threshold: 3.0
+  grade_bands:                # lower bound -> letter grade
+    A: 90
+    B: 80
+    C: 70
+    D: 60
+
+# -----------------------------------------------------------------------------
+# Machine learning
+# -----------------------------------------------------------------------------
+ml:
+  drug_classification:
+    target: "Drug"
+    numeric_features: ["Age", "Na_to_K"]
+    categorical_features: ["Sex", "BP", "Cholesterol"]
+    test_size: 0.25
+    cv_folds: 5
+    scoring: "f1_macro"
+    models: ["decision_tree", "random_forest", "xgboost"]
+    param_grid:
+      decision_tree:
+        max_depth: [3, 4, 5, 6, 8, null]
+        min_samples_split: [2, 4, 6]
+        criterion: ["gini", "entropy"]
+      random_forest:
+        n_estimators: [200, 400]
+        max_depth: [4, 6, 8, null]
+        min_samples_leaf: [1, 2]
+      xgboost:
+        n_estimators: [200, 400]
+        max_depth: [3, 4, 6]
+        learning_rate: [0.05, 0.1, 0.2]
+        subsample: [0.8, 1.0]
+  # Domain thresholds used by src/ml/preprocess.py feature engineering.
+  # Kept here (not in code) so clinical and storage cut-offs stay auditable.
+  feature_engineering:
+    clinical:
+      # Age strata used in cardiovascular prescribing guidance.
+      age_bins: [30, 45, 60]
+      age_labels: ["<30", "30-45", "45-60", "60+"]
+      # Serum sodium/potassium ratio bands. >15 is the dominant driver of the
+      # DrugY decision in the reference dataset.
+      na_to_k_low: 10.0
+      na_to_k_high: 15.0
+      # Ordinal severity encoding for BP / Cholesterol levels.
+      ordinal_levels: {HIGH: 2, NORMAL: 1, LOW: 0}
+    batch:
+      # Upper limit of the labelled 2-8 degC cold-chain storage window.
+      # (Ambient limit and humidity limit are read from the `stability` block
+      # so the ML features and the degradation physics cannot drift apart.)
+      cold_chain_max_temp_c: 8.0
+
+  batch_risk:
+    target: "batch_risk_label"
+    test_size: 0.25
+    cv_folds: 5
+    scoring: "f1_macro"
+    models: ["decision_tree", "random_forest", "xgboost"]
+    # Tuned independently of the clinical model: this task has 2,400 rows and a
+    # noisier signal, so it tolerates deeper trees and more estimators than the
+    # 200-row drug200 problem, where that depth would simply memorise the data.
+    param_grid:
+      decision_tree:
+        max_depth: [4, 6, 8, 12, null]
+        min_samples_split: [2, 10, 20]
+        criterion: ["gini", "entropy"]
+      random_forest:
+        n_estimators: [300, 600]
+        max_depth: [8, 12, null]
+        min_samples_leaf: [1, 3, 5]
+      xgboost:
+        n_estimators: [300, 600]
+        max_depth: [3, 5, 7]
+        learning_rate: [0.05, 0.1]
+        subsample: [0.8, 1.0]
+    features:
+      - storage_temp_c
+      - storage_humidity_pct
+      - storage_duration_days
+      - total_cycle_time_days
+      - qa_delay_days
+      - supplier_reliability
+      - is_cold_chain
+      - shelf_life_months
+      - drug_code
+      - region
+
+# -----------------------------------------------------------------------------
+# Inventory analytics
+# -----------------------------------------------------------------------------
+inventory:
+  abc_thresholds: {A: 0.80, B: 0.95}      # cumulative value share cut-offs
+  service_level_z: 1.65                    # 95% service level
+  stockout_risk_threshold: 0.85            # on_hand / reorder_point below this = risk
+  overstock_months_of_supply: 4.0          # above this many months of cover = overstock
+  expiry_risk_days: 120                    # units expiring within N days are at risk
+  target_turnover: 8.0                     # annual inventory turns benchmark
+
+# -----------------------------------------------------------------------------
+# Shipment analytics
+# -----------------------------------------------------------------------------
+shipments:
+  on_time_grace_days: 0
+  otif_target_pct: 95.0
+  supplier_tiers: {Preferred: 92, Approved: 85, Watchlist: 0}
+
+# -----------------------------------------------------------------------------
+# Demand forecasting
+# -----------------------------------------------------------------------------
+forecasting:
+  horizon_months: 6
+  seasonal_periods: 12
+  train_test_split_months: 6
+  confidence_level: 0.95
+  methods: ["holt_winters", "linear_trend", "moving_average"]
+
+# -----------------------------------------------------------------------------
+# Drug stability analytics
+# -----------------------------------------------------------------------------
+stability:
+  reference_temp_cold: 5.0        # cold-chain target (2-8 degC)
+  reference_temp_ambient: 25.0    # controlled room temperature
+  reference_humidity_pct: 45.0    # %RH at which the base degradation rate is defined
+  base_degradation_rate: 1.35     # % potency lost per 30 days at reference conditions
+  # Q10 rule: the chemical degradation rate multiplies by this factor for every
+  # +10 degC and divides by it for every -10 degC. This is the Arrhenius
+  # approximation underpinning ICH Q1A accelerated stability testing. Unlike a
+  # one-sided excursion penalty it is continuous, so colder storage is correctly
+  # rewarded rather than treated as identical to storage at the limit.
+  q10_factor: 2.5
+  humidity_sensitivity: 0.012     # relative rate increase per %RH above reference
+  # Distinct from `reference_humidity_pct` above: 45%RH is where the *rate law*
+  # is anchored, while 60%RH is the operational threshold above which moisture
+  # uptake in solid dosage forms becomes a documented quality concern. The
+  # former drives the physics, the latter drives feature engineering and alerts.
+  humidity_threshold: 60.0
+  potency_spec_min: 95.0          # below this = out of specification
+  potency_warning: 97.0
+  noise_sd: 0.80
+
+# -----------------------------------------------------------------------------
+# A/B testing - operational interventions available for experimentation
+# -----------------------------------------------------------------------------
+ab_testing:
+  alpha: 0.05
+  power: 0.80
+  default_sample_size: 2000
+  experiments:
+    qa_automation:
+      name: "Automated Quality Testing (PAT)"
+      metric: "QA Batch Pass Rate"
+      control_rate: 0.920
+      treatment_rate: 0.951
+      description: >
+        Replaces manual end-of-line QC sampling with in-line Process Analytical
+        Technology. Hypothesis: earlier defect detection raises batch release rate.
+    warehouse_automation:
+      name: "Automated Warehouse Picking (AS/RS)"
+      metric: "On-Time Dispatch Rate"
+      control_rate: 0.874
+      treatment_rate: 0.912
+      description: >
+        Automated storage and retrieval replaces manual picking. Hypothesis:
+        shorter pick-to-dispatch cycle lifts on-time dispatch.
+    route_optimization:
+      name: "AI Route Optimization"
+      metric: "On-Time Delivery Rate"
+      control_rate: 0.886
+      treatment_rate: 0.921
+      description: >
+        Dynamic carrier and lane selection versus fixed routing plans.
+        Hypothesis: fewer late deliveries to hospitals and pharmacies.
+    cold_chain_iot:
+      name: "IoT Cold-Chain Monitoring"
+      metric: "Batches Within Potency Spec"
+      control_rate: 0.903
+      treatment_rate: 0.948
+      description: >
+        Real-time temperature telemetry with alerting versus end-of-journey
+        data-logger review. Hypothesis: fewer temperature excursions and
+        fewer out-of-specification batches.
+
+# -----------------------------------------------------------------------------
+# Interactive simulation - slider ranges and elasticity coefficients.
+# Elasticities translate a lever movement into downstream KPI movement.
+# -----------------------------------------------------------------------------
+simulation:
+  # NOTE: `default` is only authoritative for the two purely relative levers
+  # (demand_change_pct, inventory_level_pct). Every other default is measured
+  # from the dataset at runtime - see `_LEVER_BASELINE_KEYS` in
+  # src/analytics/simulation.py - so that the simulator's "no change" state
+  # always equals observed performance. The values below are indicative only.
+  levers:
+    demand_change_pct:        {min: -30, max: 50,  default: 0,   step: 5}
+    warehouse_delay_days:     {min: 5,   max: 90,  default: 40,  step: 1}
+    manufacturing_delay_days: {min: 5,   max: 30,  default: 11,  step: 1}
+    supplier_reliability_pct: {min: 70,  max: 100, default: 91,  step: 1}
+    storage_temp_c:           {min: 2,   max: 40,  default: 22,  step: 1}
+    storage_humidity_pct:     {min: 20,  max: 90,  default: 53,  step: 1}
+    inventory_level_pct:      {min: 50,  max: 180, default: 100, step: 5}
+  elasticity:
+    reliability_to_qa_yield: 0.45     # 1pp supplier reliability -> 0.45pp QA yield
+    delay_to_expiry_risk: 0.32        # 1 extra day -> 0.32pp expiry risk
+    demand_to_stockout: 0.55          # 1pp demand -> 0.55pp stock-out risk
+
+# -----------------------------------------------------------------------------
+# Business/financial assumptions used to convert analytics into dollars
+# -----------------------------------------------------------------------------
+economics:
+  holding_cost_rate_annual: 0.22      # % of unit cost per year
+  stockout_penalty_per_unit: 4.10
+  expiry_write_off_recovery: 0.05     # salvage value of expired stock
+  late_shipment_penalty: 1850         # USD per late shipment (SLA credits)
+  currency: "USD"
+
+# -----------------------------------------------------------------------------
+# Visualisation theme
+# -----------------------------------------------------------------------------
+viz:
+  template: "plotly_white"
+  palette:
+    primary: "#0B6E99"
+    secondary: "#16A0A0"
+    accent: "#E8833A"
+    success: "#2E9E5B"
+    warning: "#E0A32E"
+    danger: "#C7443B"
+    neutral: "#6B7280"
+  sequence: ["#0B6E99", "#16A0A0", "#E8833A", "#2E9E5B", "#7C5BB8", "#C7443B", "#E0A32E", "#6B7280"]
+  funnel_scale: ["#083D57", "#0B6E99", "#1490B5", "#16A0A0", "#3FB98B", "#7DCB72", "#B9D95E", "#E8833A"]
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)-28s | %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  file: "logs/pharmachain.log"

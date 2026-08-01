@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs and local run artefacts
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+# Local editor/agent launch config (contains machine-specific absolute paths)
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated SQLite warehouse (rebuilt by `python scripts/build_dataset.py`)
+data/processed/*.db

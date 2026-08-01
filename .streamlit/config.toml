@@ -1,0 +1,17 @@
+# Streamlit theme - matches the Plotly palette defined in config/config.yaml
+# so charts and chrome share one visual identity.
+
+[theme]
+base = "light"
+primaryColor = "#0B6E99"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F5F9"
+textColor = "#111827"
+font = "sans serif"
+
+[server]
+headless = true
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
