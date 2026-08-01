@@ -143,6 +143,24 @@ def load_clinical() -> pd.DataFrame:
     return load_table("drug200").copy()
 
 
+def load_scms() -> pd.DataFrame:
+    """Real USAID SCMS delivery history, cleaned (10,324 shipments, 2006-2015).
+
+    This is the platform's real-world operational dataset and the source for every
+    procurement, vendor and logistics metric. See :mod:`src.data.scms`.
+    """
+    from src.data.scms import load_scms as _load  # local import avoids a cycle
+
+    return _load().copy()
+
+
+def load_scms_raw() -> pd.DataFrame:
+    """Real SCMS delivery history exactly as published - the bronze layer."""
+    from src.data.scms import load_scms_raw as _load_raw
+
+    return _load_raw().copy()
+
+
 def load_batches() -> pd.DataFrame:
     """Batch funnel fact table - one row per manufactured batch."""
     return load_table("batches").copy()
@@ -189,6 +207,7 @@ def load_all() -> dict[str, pd.DataFrame]:
 __all__ = [
     "load_table", "load_raw_table", "load_all", "ensure_datasets", "datasets_exist",
     "remediation_log", "injected_defect_log",
-    "load_clinical", "load_batches", "load_shipments", "load_inventory",
+    "load_clinical", "load_scms", "load_scms_raw",
+    "load_batches", "load_shipments", "load_inventory",
     "load_demand", "load_suppliers", "load_warehouses", "load_drugs",
 ]

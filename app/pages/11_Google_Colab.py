@@ -101,40 +101,48 @@ section(
 sections = pd.DataFrame([
     {"section": "1. Setup and configuration",
      "contents": "Clone the repository, install dependencies, load `config/config.yaml`."},
-    {"section": "2. Data generation",
-     "contents": "Build the seeded supply chain digital twin; show the product mix "
-                 "derived from the drug200 prescription distribution."},
-    {"section": "3. Exploratory data analysis",
-     "contents": "Distributions, correlations and class balance across both datasets."},
-    {"section": "4. Data quality assessment",
+    {"section": "2. The real data - USAID SCMS",
+     "contents": "10,324 actual shipments. Why the file's messiness is instructive, "
+                 "how structural absence differs from missing data, and why a generic "
+                 "completeness check scores it 99.3% and is wrong."},
+    {"section": "3. Data generation",
+     "contents": "Build the seeded manufacturing digital twin for what SCMS does not "
+                 "cover; product mix derived from the drug200 prescription distribution."},
+    {"section": "4. Exploratory data analysis",
+     "contents": "Distributions, correlations and class balance across the datasets."},
+    {"section": "5. Data quality assessment",
      "contents": "Profile the bronze extract, score five quality dimensions, then "
                  "quantify the uplift delivered by the cleaning layer."},
-    {"section": "5. Preprocessing and feature engineering",
+    {"section": "6. Preprocessing and feature engineering",
      "contents": "Median/mode imputation, one-hot encoding, scaling, and the "
                  "engineered clinical and thermal-load features - with the reasoning "
                  "for each."},
-    {"section": "6. Model 1 - drug classification",
+    {"section": "7. Model 1 - drug classification",
      "contents": "Decision tree, random forest and XGBoost tuned by grid search "
                  "under stratified 5-fold CV; confusion matrix, ROC, "
                  "precision-recall and feature importance."},
-    {"section": "7. Model 2 - batch risk classification",
+    {"section": "8. Model 2 - batch risk classification",
      "contents": "The same protocol applied to batch stability telemetry, "
                  "predicting Low/Medium/High risk."},
-    {"section": "8. Funnel analytics",
+    {"section": "9. Model 3 - late delivery (real data)",
+     "contents": "Trained on real shipments with strict leakage control. Why accuracy "
+                 "is the wrong metric here, and the gains curve that makes the model "
+                 "operationally useful."},
+    {"section": "10. Funnel analytics",
      "contents": "Eight-stage conversion, drop-off, dwell time and bottleneck "
                  "identification."},
-    {"section": "9. Statistical A/B testing",
+    {"section": "11. Statistical A/B testing",
      "contents": "Two-proportion z-test, chi-square, Welch's t-test, power analysis "
                  "and the costed recommendation for each intervention."},
-    {"section": "10. Demand forecasting",
+    {"section": "12. Demand forecasting",
      "contents": "Holt-Winters against linear trend and moving average, selected by "
                  "backtest on held-out months."},
-    {"section": "11. Drug stability modelling",
+    {"section": "13. Drug stability modelling",
      "contents": "OLS degradation model, shelf-life estimation and the cold-chain "
                  "excursion significance test."},
-    {"section": "12. Model serialisation",
-     "contents": "Persist pipelines with joblib and write the metadata the dashboard "
-                 "reads."},
+    {"section": "14. Model serialisation",
+     "contents": "Persist all three pipelines with joblib and write the metadata the "
+                 "dashboard reads."},
 ])
 show_table(sections, height=470)
 
@@ -147,7 +155,7 @@ cd {GITHUB_REPO}
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Build the data layer and train both models (deterministic, seed={cfg.project.random_seed})
+# Build the data layer and train all three models (deterministic, seed={cfg.project.random_seed})
 python scripts/build_dataset.py
 python scripts/train_models.py
 

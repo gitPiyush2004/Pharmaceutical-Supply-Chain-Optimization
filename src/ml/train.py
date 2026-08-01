@@ -3,19 +3,23 @@ Model training, tuning and evaluation for the PharmaChain ML package.
 
 Business purpose
 ----------------
-Two independent supervised problems share one training contract:
+Three independent supervised problems share one training contract:
 
 * **MODEL 1 - ``drug_classification``** - recommend one of five formulary drugs
   from a patient's age, sex, blood pressure, cholesterol level and serum
-  sodium/potassium ratio (Kaggle drug200).
+  sodium/potassium ratio (real Kaggle drug200 data).
 * **MODEL 2 - ``batch_risk``** - predict the Quality Assurance risk tier
   (Low / Medium / High) a manufactured batch will attract, from the storage and
-  supply chain conditions it actually experienced.
+  supply chain conditions it actually experienced (simulated telemetry).
+* **MODEL 3 - ``late_delivery``** - predict whether a shipment will arrive after
+  its scheduled date, trained on the **real** USAID SCMS delivery history of
+  10,324 actual pharmaceutical shipments.
 
-Both are trained the same way: clean, engineer, split (stratified), tune three
-candidate families with ``GridSearchCV`` over the grids declared in
+All three are trained the same way: clean, engineer, split (stratified), tune
+three candidate families with ``GridSearchCV`` over the grids declared in
 ``config.yaml``, pick the winner by cross-validated score, then report a full
-held-out evaluation. Nothing is tuned on the test fold.
+held-out evaluation. Nothing is tuned on the test fold, and using one metric
+(macro F1) across all three keeps their numbers directly comparable.
 
 What this module returns
 ------------------------
@@ -295,9 +299,16 @@ def _curve_metrics(
         binarised = np.hstack([1 - binarised, binarised])
 
     try:
-        roc_auc_ovr = float(
-            roc_auc_score(y_test, proba, multi_class="ovr", average="macro", labels=list(classes))
-        )
+        if len(classes) == 2:
+            # sklearn rejects multi_class="ovr" for a 2-class problem. Score the
+            # positive class probability directly; without this branch a binary
+            # model silently reports ROC AUC as NaN.
+            roc_auc_ovr = float(roc_auc_score(binarised[:, 1], proba[:, 1]))
+        else:
+            roc_auc_ovr = float(
+                roc_auc_score(y_test, proba, multi_class="ovr", average="macro",
+                              labels=list(classes))
+            )
     except ValueError:  # a class absent from the test fold makes OvR undefined
         roc_auc_ovr = float("nan")
         log.warning("ROC AUC (OvR) undefined - a class is missing from the test fold.")
@@ -627,7 +638,7 @@ def train_batch_risk_classifier(tune: bool = True) -> dict[str, Any]:
     numeric_features, categorical_features = pp.batch_feature_columns()
 
     # Only the clinical block declares candidate families and grids; reuse them
-    # so both models are compared across the same three families.
+    # so every model is compared across the same three families.
     grid_source = cfg.ml.drug_classification
     model_names = list(settings.get("models", grid_source.get("models", _DEFAULT_MODELS)))
     param_grids = dict(settings.get("param_grid", grid_source.get("param_grid", {})))
@@ -647,6 +658,103 @@ def train_batch_risk_classifier(tune: bool = True) -> dict[str, Any]:
     log.info(
         "=== MODEL 2 'batch_risk': finished in %.1fs ===", time.perf_counter() - started
     )
+    return result
+
+
+def train_late_delivery_classifier(tune: bool = True) -> dict[str, Any]:
+    """Predict late delivery on the **real** USAID SCMS dataset (MODEL 3).
+
+    This is the platform's only model trained on genuine operational data:
+    10,324 real shipments of HIV and malaria commodities to 43 countries between
+    2006 and 2015. The target is whether a line item arrived after its scheduled
+    delivery date.
+
+    Leakage control is the whole game here. Every feature must be knowable at the
+    moment the order is placed, so the model is a genuine forward-looking screen:
+
+    * **Included** - quantity, line value, unit price, pack size, weight, freight
+      cost, the *planned* quote-to-scheduled lead time, transport mode, commodity
+      group, destination region, fulfilment route, INCO term and managing office.
+    * **Deliberately excluded** - ``date_delivered``, ``delivery_delay_days``,
+      ``vendor_lead_time_days``, ``total_lead_time_days`` and
+      ``recording_lag_days``. Each is computed from the delivery date and would
+      hand the model its own answer.
+
+    Vendor identity is also excluded. With 73 vendors, several appearing only a
+    handful of times, one-hot encoding vendor invites the model to memorise
+    individual suppliers rather than learn transferable structure - and it would
+    not generalise to a vendor the model has never seen.
+
+    Parameters
+    ----------
+    tune : bool, default True
+        Run the grid search shared by every task in the platform.
+
+    Returns
+    -------
+    dict
+        Same contract as the other trainers.
+
+    Raises
+    ------
+    ValueError
+        If the SCMS table is missing a configured feature column.
+    """
+    from src.data.scms import load_scms  # local import keeps ML free of a hard dep
+
+    cfg = get_config()
+    settings = cfg.scms.late_delivery_model
+    started = time.perf_counter()
+    log.info("=== MODEL 3 'late_delivery' (real SCMS data): training started ===")
+
+    frame = load_scms().copy()
+
+    numeric_features = list(settings.numeric_features)
+    categorical_features = list(settings.categorical_features)
+    missing = set(numeric_features + categorical_features) - set(frame.columns)
+    if missing:
+        raise ValueError(
+            f"SCMS table is missing configured feature(s): {sorted(missing)}")
+
+    # The target is undefined where a delivery date could not be resolved.
+    target = str(settings.target)
+    frame = frame[frame[target].notna()].copy()
+    frame[target] = frame[target].astype(int).map({0: "On Time", 1: "Late"})
+
+    # Categoricals arrive as pandas "string" dtype; the one-hot encoder expects
+    # object, and unresolved values become an explicit category rather than NaN
+    # so "we did not record the mode" stays a distinguishable signal.
+    for column in categorical_features:
+        frame[column] = frame[column].astype("object").fillna("Unknown")
+
+    grid_source = cfg.ml.drug_classification
+    model_names = list(settings.get("models", grid_source.get("models", _DEFAULT_MODELS)))
+    param_grids = dict(settings.get("param_grid", grid_source.get("param_grid", {})))
+
+    result = _train_classifier(
+        task_name="late_delivery",
+        frame=frame,
+        target=target,
+        numeric_features=numeric_features,
+        categorical_features=categorical_features,
+        settings=settings,
+        param_grids=param_grids,
+        model_names=model_names,
+        tune=tune,
+        extra_metadata={
+            "data_source": "USAID SCMS Delivery History (real operational data)",
+            "records": int(len(frame)),
+            "excluded_for_leakage": [
+                "date_delivered", "delivery_delay_days", "vendor_lead_time_days",
+                "total_lead_time_days", "recording_lag_days",
+            ],
+            "excluded_high_cardinality": ["vendor", "manufacturing_site", "country"],
+            "class_balance": {
+                str(k): int(v) for k, v in frame[target].value_counts().items()},
+        },
+    )
+    log.info("=== MODEL 3 'late_delivery': finished in %.1fs ===",
+             time.perf_counter() - started)
     return result
 
 
@@ -757,17 +865,17 @@ def save_artifacts(result: dict[str, Any], name: str) -> Path:
 
 
 def train_all(tune: bool = True) -> dict[str, dict[str, Any]]:
-    """Train, evaluate and persist both platform models.
+    """Train, evaluate and persist all three platform models.
 
     Parameters
     ----------
     tune : bool, default True
-        Passed through to both trainers.
+        Passed through to every trainer.
 
     Returns
     -------
     dict
-        ``{'drug_classification': <result>, 'batch_risk': <result>}``.
+        ``{'drug_classification': ..., 'batch_risk': ..., 'late_delivery': ...}``.
     """
     started = time.perf_counter()
     log.info("train_all: starting full training run (tune=%s)", tune)
@@ -775,6 +883,7 @@ def train_all(tune: bool = True) -> dict[str, dict[str, Any]]:
     trainers: dict[str, Callable[[bool], dict[str, Any]]] = {
         "drug_classification": train_drug_classifier,
         "batch_risk": train_batch_risk_classifier,
+        "late_delivery": train_late_delivery_classifier,
     }
     results: dict[str, dict[str, Any]] = {}
     for name, trainer in trainers.items():
@@ -795,6 +904,7 @@ __all__ = [
     "get_model",
     "train_drug_classifier",
     "train_batch_risk_classifier",
+    "train_late_delivery_classifier",
     "save_artifacts",
     "train_all",
 ]

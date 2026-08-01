@@ -54,7 +54,8 @@ log = get_logger(__name__)
 # Artefact stems written by :func:`src.ml.train.save_artifacts`.
 DRUG_MODEL = "drug_classification"
 BATCH_MODEL = "batch_risk"
-KNOWN_MODELS: tuple[str, ...] = (DRUG_MODEL, BATCH_MODEL)
+LATE_DELIVERY_MODEL = "late_delivery"
+KNOWN_MODELS: tuple[str, ...] = (DRUG_MODEL, BATCH_MODEL, LATE_DELIVERY_MODEL)
 
 # The one instruction a user can act on when an artefact is missing.
 _TRAIN_HINT = "run `python scripts/train_models.py` (or `python -c \"from src.ml.train import train_all; train_all()\"`)"
@@ -570,9 +571,189 @@ def predict_batch_risk_frame(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------------------
+# MODEL 3 - late delivery risk on the real SCMS dataset
+# ---------------------------------------------------------------------------
+def score_late_delivery_risk(scms: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Score every real shipment with its predicted probability of arriving late.
+
+    Parameters
+    ----------
+    scms : pandas.DataFrame, optional
+        Pre-loaded SCMS frame. Loads the full dataset when omitted.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The input with ``late_risk_probability`` and ``late_risk_decile`` added
+        (decile 1 = highest risk).
+    """
+    from src.data.scms import load_scms
+
+    model = load_model(LATE_DELIVERY_MODEL)
+    frame = (load_scms() if scms is None else scms).copy()
+
+    features = list(model.metadata["numeric_features"]) + \
+        list(model.metadata["categorical_features"])
+    design = frame[features].copy()
+    for column in model.metadata["categorical_features"]:
+        design[column] = design[column].astype("object").fillna("Unknown")
+
+    labels = list(model.pipeline.classes_)
+    late_index = labels.index("Late") if "Late" in labels else 1
+    frame["late_risk_probability"] = model.pipeline.predict_proba(design)[:, late_index]
+
+    # qcut on ranks so ties cannot collapse the deciles.
+    frame["late_risk_decile"] = pd.qcut(
+        frame["late_risk_probability"].rank(method="first", ascending=False),
+        10, labels=range(1, 11)).astype(int)
+
+    log.info("Scored %d shipments for late-delivery risk (mean p=%.3f)",
+             len(frame), frame["late_risk_probability"].mean())
+    return frame
+
+
+def late_delivery_targeting_curve() -> pd.DataFrame:
+    """Gains curve: what share of late deliveries you catch by inspecting the top N%.
+
+    This is the metric that actually matters for this model. Raw accuracy is
+    misleading on an 88.5/11.5 split - always predicting "on time" scores 88.5%
+    and is useless. What an expeditor can act on is a *ranking*: given capacity
+    to monitor a fraction of shipments, how many of the genuinely late ones does
+    the model surface?
+
+    Evaluated strictly on the **held-out test split**, reproduced with the same
+    seed and test size used at training time. Scoring the full dataset would
+    include rows the model was fitted on and inflate every number here.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``targeted_pct``, ``shipments_reviewed``, ``late_captured``,
+        ``capture_rate_pct``, ``precision_pct``, ``lift``. ``lift`` is the
+        capture rate divided by the targeted share - how many times better than
+        reviewing shipments at random.
+    """
+    from src.config import get_config
+    from src.data.scms import load_scms
+
+    cfg = get_config()
+    settings = cfg.scms.late_delivery_model
+    model = load_model(LATE_DELIVERY_MODEL)
+
+    frame = load_scms().copy()
+    frame = frame[frame["is_late"].notna()].copy()
+    target = frame["is_late"].astype(int).map({0: "On Time", 1: "Late"})
+
+    numeric = list(settings.numeric_features)
+    categorical = list(settings.categorical_features)
+    design = frame[numeric + categorical].copy()
+    for column in categorical:
+        design[column] = design[column].astype("object").fillna("Unknown")
+
+    # Same split policy as training, so these are exactly the unseen rows.
+    _, X_test, _, y_test = pp.split_data(
+        design, target, float(settings.test_size), int(cfg.project.random_seed))
+
+    labels = list(model.pipeline.classes_)
+    late_index = labels.index("Late") if "Late" in labels else 1
+    probability = model.pipeline.predict_proba(X_test)[:, late_index]
+
+    scored = pd.DataFrame({
+        "late_risk_probability": probability,
+        "is_late": (y_test.to_numpy() == "Late").astype(int),
+    }).sort_values("late_risk_probability", ascending=False)
+
+    total = len(scored)
+    total_late = int(scored["is_late"].sum())
+    cumulative_late = scored["is_late"].cumsum()
+
+    rows: list[dict[str, Any]] = []
+    for share in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50):
+        cutoff = max(int(round(total * share)), 1)
+        captured = int(cumulative_late.iloc[cutoff - 1])
+        capture_rate = 100 * captured / total_late if total_late else 0.0
+        rows.append({
+            "targeted_pct": round(100 * share, 1),
+            "shipments_reviewed": cutoff,
+            "late_captured": captured,
+            "capture_rate_pct": round(capture_rate, 2),
+            "precision_pct": round(100 * captured / cutoff, 2),
+            "lift": round(capture_rate / (100 * share), 2),
+        })
+    return pd.DataFrame(rows)
+
+
+def predict_late_delivery(**features: Any) -> dict[str, Any]:
+    """Predict late-delivery risk for a single planned shipment.
+
+    Parameters
+    ----------
+    **features
+        One value per feature in the model's declared feature list. Missing
+        categoricals default to ``"Unknown"``; missing numerics are imputed by
+        the pipeline.
+
+    Returns
+    -------
+    dict
+        ``prediction``, ``late_probability``, ``risk_band``, ``explanation``
+        and ``model``.
+    """
+    model = load_model(LATE_DELIVERY_MODEL)
+    numeric = list(model.metadata["numeric_features"])
+    categorical = list(model.metadata["categorical_features"])
+
+    row = {column: features.get(column, np.nan) for column in numeric}
+    row.update({column: features.get(column, "Unknown") for column in categorical})
+    design = pd.DataFrame([row])
+
+    labels = list(model.pipeline.classes_)
+    late_index = labels.index("Late") if "Late" in labels else 1
+    probability = float(model.pipeline.predict_proba(design)[0][late_index])
+
+    # Bands come from the targeting curve rather than the default 0.5 cut: the
+    # model is used to prioritise attention, not to make a binary call.
+    band = ("High" if probability >= 0.35
+            else "Elevated" if probability >= 0.20 else "Low")
+
+    # Driver text mirrors what the fitted model and the scorecards actually show:
+    # regional-distribution-centre fulfilment is the dominant risk factor (the
+    # "SCMS from RDC" channel is the worst-performing supplier at 82.9% on-time),
+    # not direct-drop ordering.
+    drivers = []
+    if str(row.get("fulfil_via")) == "From RDC":
+        drivers.append("regional distribution centre fulfilment "
+                       "(the weakest channel at 82.9% on-time)")
+    if str(row.get("shipment_mode")) in {"Ocean", "Truck"}:
+        drivers.append(f"{row['shipment_mode']} transport "
+                       "(the two slowest modes on record)")
+    if str(row.get("region")) in {"West & Central Africa", "Southern Africa",
+                                  "East Africa"}:
+        drivers.append(f"{row['region']} destination (below the on-time target)")
+    lead = row.get("scheduled_lead_time_days")
+    if isinstance(lead, (int, float)) and not pd.isna(lead) and lead > 250:
+        drivers.append(f"long planned lead time ({lead:.0f} days)")
+
+    explanation = (
+        f"Predicted {probability:.1%} probability of late delivery ({band} risk)."
+        + (" Drivers: " + "; ".join(drivers) + "." if drivers else
+           " No dominant risk driver in the supplied attributes.")
+    )
+
+    return {
+        "prediction": "Late" if probability >= 0.5 else "On Time",
+        "late_probability": round(probability, 4),
+        "risk_band": band,
+        "explanation": explanation,
+        "model": model.metadata.get("model_name", "unknown"),
+    }
+
+
 __all__ = [
     "DRUG_MODEL",
     "BATCH_MODEL",
+    "LATE_DELIVERY_MODEL",
     "KNOWN_MODELS",
     "LoadedModel",
     "load_model",
@@ -581,4 +762,7 @@ __all__ = [
     "predict_drug_batch",
     "predict_batch_risk",
     "predict_batch_risk_frame",
+    "predict_late_delivery",
+    "score_late_delivery_risk",
+    "late_delivery_targeting_curve",
 ]

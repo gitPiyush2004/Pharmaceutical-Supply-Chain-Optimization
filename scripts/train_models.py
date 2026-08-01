@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 """
-Train and persist both platform models.
+Train and persist all three platform models.
 
-1. **Drug classification** - patient-level prescribing model on the Kaggle
+1. **Drug classification** - patient-level prescribing model on the real Kaggle
    ``drug200`` dataset.
-2. **Batch risk classification** - stability risk tier from batch telemetry.
+2. **Batch risk classification** - stability risk tier from simulated batch
+   telemetry.
+3. **Late delivery** - arrival-after-schedule risk on the **real** USAID SCMS
+   delivery history (10,324 actual shipments).
 
 Each family trains a decision tree, a random forest and an XGBoost model under
 identical cross-validation, selects the winner on cross-validated macro F1, and
@@ -12,10 +15,11 @@ writes the fitted pipeline plus full evaluation metadata to ``models/``.
 
 Usage
 -----
-    python scripts/train_models.py                    # tune and train both
+    python scripts/train_models.py                    # tune and train all three
     python scripts/train_models.py --no-tune          # defaults only (fast)
     python scripts/train_models.py --model drug       # one family only
     python scripts/train_models.py --model batch
+    python scripts/train_models.py --model late
 """
 
 from __future__ import annotations
@@ -31,7 +35,8 @@ from src.config import get_config  # noqa: E402
 from src.data import loader  # noqa: E402
 from src.logger import get_logger  # noqa: E402
 from src.ml.train import (save_artifacts, train_all,  # noqa: E402
-                          train_batch_risk_classifier, train_drug_classifier)
+                          train_batch_risk_classifier, train_drug_classifier,
+                          train_late_delivery_classifier)
 
 log = get_logger("scripts.train_models")
 
@@ -41,8 +46,9 @@ def parse_args() -> argparse.Namespace:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-tune", action="store_true",
                         help="Skip grid search and use default hyper-parameters.")
-    parser.add_argument("--model", choices=["drug", "batch", "both"], default="both",
-                        help="Which model family to train (default: both).")
+    parser.add_argument("--model", choices=["drug", "batch", "late", "all"],
+                        default="all",
+                        help="Which model family to train (default: all three).")
     return parser.parse_args()
 
 
@@ -80,16 +86,18 @@ def main() -> int:
     # Training reads the supply chain data, so make sure it exists first.
     loader.ensure_datasets()
 
-    if args.model == "both":
+    if args.model == "all":
         results = train_all(tune=tune)
-    elif args.model == "drug":
-        result = train_drug_classifier(tune=tune)
-        save_artifacts(result, "drug_classification")
-        results = {"drug_classification": result}
     else:
-        result = train_batch_risk_classifier(tune=tune)
-        save_artifacts(result, "batch_risk")
-        results = {"batch_risk": result}
+        single = {
+            "drug": ("drug_classification", train_drug_classifier),
+            "batch": ("batch_risk", train_batch_risk_classifier),
+            "late": ("late_delivery", train_late_delivery_classifier),
+        }[args.model]
+        name, trainer = single
+        result = trainer(tune=tune)
+        save_artifacts(result, name)
+        results = {name: result}
 
     for name, result in results.items():
         report(name, result)

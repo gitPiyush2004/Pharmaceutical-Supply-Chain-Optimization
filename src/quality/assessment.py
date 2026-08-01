@@ -118,6 +118,9 @@ _SEVERITY_ORDER: dict[str, int] = {"High": 0, "Medium": 1, "Low": 2, "None": 3}
 # patient observation with no identifier column).
 _DATASET_KEYS: dict[str, list[str] | None] = {
     "drug200": None,
+    # The real USAID SCMS export. Its defects are genuine rather than injected,
+    # which makes it the most honest test of this module in the platform.
+    "scms": ["ID"],
     "batches": ["batch_id"],
     "shipments": ["shipment_id"],
     "inventory": ["snapshot_month", "warehouse_id", "drug_code"],

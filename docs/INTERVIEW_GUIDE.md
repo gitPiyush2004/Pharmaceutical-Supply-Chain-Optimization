@@ -13,28 +13,34 @@ competent one.
 
 Use this when someone says *"tell me about a project."*
 
-> I built an analytics platform for a pharmaceutical supply chain. It tracks batches
-> through eight stages — from buying the raw ingredient to a unit reaching a patient —
-> and finds where product is lost along the way.
+> I built a pharmaceutical supply chain analytics platform on **real USAID data —
+> 10,324 actual shipments of HIV and malaria medicines to 43 countries between 2006
+> and 2015**.
 >
-> The headline finding is that only about **63% of what you buy actually reaches a
-> patient**, and the losses aren't spread evenly. Quality testing is the worst stage:
-> it destroys the most volume *and* it's the slowest, taking around 19 days. So it's
-> the bottleneck on two dimensions at once.
+> The most interesting finding is counter-intuitive. I built a vendor scorecard
+> expecting a manufacturer to be the weak link, and the worst performer turned out to
+> be an **internal channel** — their own regional distribution centres, at 82.9%
+> on-time across about a billion dollars of product. That's a much better finding than
+> a bad supplier, because you can fix it without renegotiating a single contract.
 >
-> But finding a bottleneck isn't the same as knowing what to do about it. So I ran
-> **A/B tests on four operational interventions** — automated quality testing, warehouse
-> automation, route optimisation and IoT cold-chain monitoring — and used chi-square
-> and two-proportion z-tests to work out which ones produce a real, statistically
-> significant improvement rather than noise.
+> I also trained a model to predict late delivery. It gets **ROC AUC 0.84**, but its
+> raw accuracy is actually *below* the majority-class baseline — because only 11.5% of
+> shipments are late. That's not a broken model, it's the wrong metric. So I built a
+> gains curve instead: **review the top 20% by predicted risk and you catch 61% of all
+> late deliveries**, three times better than random. That turns it into an expeditor's
+> priority queue rather than a yes/no gate.
 >
-> I also built **two machine learning models**: one that predicts which drug a patient
-> should get from their clinical readings, and one that predicts whether a
-> manufactured batch will go out of specification, based on storage conditions.
+> On top of that I simulated the manufacturing side — storage conditions, batch quality,
+> inventory — because no public dataset has per-batch telemetry, and I ran **A/B tests
+> with chi-square and two-proportion z-tests** on four operational interventions to
+> work out which ones produce a real improvement rather than noise.
 >
-> It's all in a Streamlit dashboard with twelve pages, backed by 99 tests.
+> It's a Streamlit dashboard, thirteen pages, backed by 131 tests.
 
 **Then stop.** Let them pick where to go. Whatever they ask about, you have depth.
+
+> **Say "real data" in the first sentence.** It is the single biggest differentiator
+> against other portfolio projects, and it changes how everything after it is heard.
 
 ---
 
@@ -44,37 +50,49 @@ If you get five minutes instead of one, tell it as a narrative. Analysts who tel
 stories get remembered; analysts who list technologies don't.
 
 **Act 1 — The question.**
-"A pharma company buys expensive raw ingredients and turns them into medicine. Along
-the way, product gets lost — rejected at quality control, damaged in transit, expired
-on a shelf. Nobody could tell me *where* the losses were concentrated, so nobody knew
-where to spend money fixing it."
+"A global health programme ships HIV and malaria medicines to 43 developing
+countries. Every late delivery is a stock-out risk at a clinic. But with 73 vendors,
+four transport modes and ten thousand shipments, nobody could say *where* the
+reliability problem actually was — so nobody knew where to spend money fixing it."
 
-**Act 2 — Building the measurement.**
-"First I had to be able to see the funnel at all. I built a data layer that tracks
-every batch through all eight stages — units at each stage, the date it cleared, the
-storage conditions it experienced. Then I had to trust it, so I wrote a data quality
-module that scores five dimensions and a cleaning layer that fixes what it finds."
+**Act 2 — Getting the data honest first.**
+"USAID publishes this as open data, and it's genuinely messy in ways that matter.
+Freight cost is a text column containing things like `Freight Included in Commodity
+Cost` and cross-references like `See DN-304`. Dates are mixed formats in the same
+file. A standard completeness check scores it 99.3% complete and grade A — and that's
+wrong. Over half the purchase-order dates and 40% of freight costs are unusable
+strings sitting in text columns. So before any analysis I built a parser that
+classifies every ambiguous value and records *why* it couldn't be used."
 
-**Act 3 — The finding.**
-"Quality testing was the bottleneck on both dimensions — most volume lost and slowest
-stage. And when I looked at *why* batches were failing, the reasons clustered on assay
-and dissolution problems, which trace back to the **incoming raw material**, not the
-manufacturing process. Two suppliers had a 78% quality pass rate against 96% for the
-best ones. So the quality problem was actually a sourcing problem."
+**Act 3 — The distinction that changed the analysis.**
+"The most important call was recognising that `N/A - From RDC` isn't missing data.
+It correctly records that no vendor purchase order existed, because those goods came
+from regional distribution centre stock. Five thousand rows. If I'd imputed those I'd
+have invented five thousand purchase orders that never happened. So I gave every
+gap a reason code — structural absence, genuinely missing, or cross-referenced — and
+excluded structural absences from the statistics rather than filling them in."
 
-**Act 4 — The proof.**
-"That's a hypothesis, not a conclusion. So I set up controlled experiments. In-line
-quality technology showed a statistically significant improvement in batch release
-rate. But I didn't stop at the p-value — I checked whether the test was adequately
-powered, and whether the effect was big enough to be worth the capital. Two of the
-four interventions cleared all three bars."
+**Act 4 — The finding.**
+"I built the vendor scorecard expecting a bad manufacturer. The worst performer was
+**their own regional distribution centre channel** — 82.9% on-time across $1.09
+billion of product. That's a far more actionable finding, because an internal channel
+doesn't need a contract renegotiation to fix. And the mode analysis gave me the
+cost-service frontier straight from real numbers: ocean is six times cheaper per kilo
+than air and eight points less reliable."
 
-**Act 5 — The honest bit.**
-"The supply chain data is a simulation I built, not a real company's data — no public
-dataset has batch-level funnel telemetry. I say that clearly in the README. What's
-real is the method, and because I know the ground truth I could actually *verify* the
-analytics work — I planted four findings in the generator and the tests assert the
-analysis recovers all four."
+**Act 5 — Making the model useful, not just accurate.**
+"I trained a model to predict late delivery. ROC AUC 0.84 — but its accuracy was
+*below* the majority-class baseline, because only 11.5% of shipments are late. Rather
+than tune toward a vanity number, I changed the decision rule: I built a gains curve
+showing that reviewing the top 20% by predicted risk catches 61% of all late
+deliveries. That's an expeditor's work queue, and it's genuinely deployable."
+
+**Act 6 — The honest bit.**
+"The manufacturing half — storage conditions, batch quality, inventory — is
+simulated, because SCMS doesn't cover manufacturing and no public dataset has
+per-batch telemetry. I label every simulated figure as simulated. And because I know
+that data's ground truth, I could verify the analytics actually work: I planted four
+findings in the generator and the tests assert the analysis recovers all four."
 
 That last act is the strongest thing you can say. Most candidates oversell. Naming
 your own limitation before you're asked signals seniority.
@@ -83,22 +101,36 @@ your own limitation before you're asked signals seniority.
 
 ## 3. Numbers worth knowing cold
 
-Don't memorise everything. Memorise these.
+Don't memorise everything. Memorise these — the real-data block especially.
+
+### Real data (USAID SCMS) — lead with these
+
+| Number | What it is |
+|---|---|
+| **10,324** | Real shipments, 2006–2015 |
+| **43 / 73 / 88** | Countries / vendors / manufacturing sites |
+| **$1.63B** | Total commodity value moved |
+| **88.5%** | Actual on-time delivery |
+| **82.9%** | Worst performer — the internal RDC channel, on $1.09B of value |
+| **$1.68 vs $10.02** | Ocean vs air freight, per kg (82.5% vs 90.4% on-time) |
+| **44%** | Share of line items with a vendor PO date — the rest bypass vendor ordering |
+| **61% / 27% / 11.5%** | Arrive exactly on schedule / early / late |
+| **0.845** | Late-delivery model ROC AUC |
+| **61% at top 20%** | Late deliveries caught by reviewing the riskiest fifth (3.0× lift) |
+
+### Simulated manufacturing side
 
 | Number | What it is |
 |---|---|
 | **63%** | End-to-end yield — units procured that reach a patient |
-| **~$127M** | Value lost across the modelled period |
+| **~$127M** | Modelled value lost |
 | **8** | Funnel stages |
-| **~2,400 / ~7,200** | Batches / shipment legs |
 | **19 days** | Mean quality-testing dwell (~28 for failed batches needing retest) |
-| **78% vs 96%** | Worst vs best supplier QA pass rate |
-| **~4.7 pp** | Potency lost when a cold-chain excursion occurs (p < 0.001) |
-| **89%** | Network on-time delivery, against a 95% target |
+| **~4.7 pp** | Potency lost on a cold-chain excursion (p < 0.001) |
 | **0.98 / 0.988** | Clinical model test accuracy / macro F1 |
 | **0.745 / 0.702** | Batch risk test accuracy / macro F1 |
 | **4** | Interventions A/B tested |
-| **99** | Tests passing |
+| **131** | Tests passing |
 
 If you forget a number, say *"I'd need to check the exact figure, but the order of
 magnitude was…"* That is a completely acceptable answer and far better than guessing.
@@ -107,35 +139,70 @@ magnitude was…"* That is a completely acceptable answer and far better than gu
 
 ## 4. The questions you will get
 
-### "Why is the supply chain data synthetic?"
+### "Which parts are real and which are simulated?"
 
-This is the question. Answer it directly and without apology.
+Answer this crisply and unprompted — volunteering it builds far more credibility than
+being caught by it.
 
-> Because the alternative was worse. I needed batch-level funnel telemetry —
-> per-stage timestamps, per-stage yields, storage conditions and shipment legs all on
-> the same key. No public dataset has that. I could have stitched three or four
-> incomplete extracts together and pretended the joins were sound, but the joins
-> wouldn't have been sound and the analysis would have been built on a fiction I
-> couldn't see.
+> Two of the three datasets are real. The **USAID SCMS delivery history is genuine
+> operational data** — 10,324 actual shipments, published as US Government open data —
+> and it drives all the procurement, vendor, logistics and freight analysis plus the
+> late-delivery model. The **Kaggle drug200 clinical dataset** is real too.
 >
-> So I built a generator instead, with three properties. It's **reproducible** — same
-> seed, byte-identical output, so every number in my README can be re-derived. It's
-> **calibrated** — stage yields, QC release times and OTIF levels come from published
-> industry benchmarks, all declared in a config file rather than buried in code. And
-> it's **coupled to the real data** — the product mix comes from the actual prescription
-> distribution in the Kaggle clinical dataset.
+> The **manufacturing side is simulated**: batch quality outcomes, storage temperature
+> and humidity, inventory snapshots. That's because SCMS records procurement and
+> logistics, not manufacturing — and no public dataset carries per-batch storage
+> telemetry, because that data doesn't leave a pharma company.
 >
-> There's a benefit I didn't expect: because I know the ground truth, I can *verify*
-> the analytics. I planted four structural signals in the generator, and the test
-> suite asserts the analysis discovers each one. You can't do that with real data.
+> I had a choice there. I could have dropped the stability and inventory analytics
+> entirely, or pretended SCMS covered something it doesn't. Instead I built a
+> calibrated generator for exactly those gaps, and labelled every simulated figure as
+> simulated — in the dashboard and in the README.
 
-**If they push:** *"So the findings aren't real?"*
+**If they push:** *"Doesn't the simulated half undermine it?"*
 
-> Correct, and I say so in the README. The findings demonstrate method, not facts
-> about a company. What transfers to a real engagement is the pipeline, the
-> statistical framework, and the discipline of separating what was measured from what
-> was experimentally validated. Point the loader at a real extract and everything
-> downstream works unchanged.
+> It would if I blurred them together. There's a dedicated Real-World SCMS page, the
+> models are labelled by data provenance, and the Home page opens by stating which is
+> which. The simulation earns its place two ways: it covers domains that otherwise
+> couldn't be shown at all, and because I know its ground truth I can *verify* the
+> analytics — I planted four structural signals in the generator and the test suite
+> asserts the analysis recovers all four. You can't do that with real data.
+
+### "What surprised you?"
+
+A great question to get. Have this ready — it is the best story in the project.
+
+> I built the vendor scorecard expecting to find a bad manufacturer. The worst
+> performer turned out to be **"SCMS from RDC"** — which isn't a supplier at all. It's
+> their own regional distribution centre channel, running at 82.9% on-time across
+> $1.09 billion of commodity value.
+>
+> That reframed the finding completely. A bad external supplier is a procurement
+> problem that needs a contract renegotiation. A bad *internal* channel is an
+> operations problem you already control.
+>
+> And the machine learning corroborated it from a different direction — the top
+> feature in the late-delivery model is fulfilment route, ahead of transport mode or
+> destination. The model found the same thing without being told to look.
+
+### "Your late-delivery model has worse accuracy than doing nothing. Why ship it?"
+
+If they spot this, they are testing whether you understand your own metrics.
+
+> Because accuracy is the wrong metric, and I'd argue that's the most useful thing
+> the project taught me. Only 11.5% of shipments are late, so always predicting
+> "on time" scores 88.5%. My model gets 87.9% — marginally worse, and completely
+> useless as a comparison.
+>
+> The metrics that matter are ROC AUC, which is 0.84, and the gains curve. If an
+> expeditor has capacity to review a fifth of shipments, the model surfaces **61% of
+> everything that will actually be late** — three times better than picking at random.
+> That's a real operational tool.
+>
+> So the fix isn't a better model, it's a better decision rule: use the predicted
+> probability to rank and triage, not to make a binary call at 0.5. I show the gains
+> curve on the dashboard instead of leading with accuracy, precisely because leading
+> with accuracy here would be misleading.
 
 ### "Your clinical model gets 98% accuracy. Isn't that suspicious?"
 
@@ -276,56 +343,57 @@ Have a real answer. This one is genuinely good:
 
 ## 5. Demo path (5 minutes)
 
-Don't wander. Follow this route.
+Don't wander. Lead with the real data.
 
-1. **Home** — "Here's the whole business on one page. 63% yield, $127M lost, and the
-   funnel shows you immediately where." *Point at the widest gap.*
-2. **Funnel Analytics** → bottleneck table — "Quality testing is flagged on both
-   drop-off and delay. The severity score combines them with value lost."
-3. **Funnel Analytics** → QA Failure Reasons tab — "And the failure modes are assay and
-   dissolution, which are raw-material problems. That's the link to sourcing."
-4. **Shipments** → supplier scorecard — "There they are. 78% versus 96%. Same suppliers
-   driving both quality failures and late delivery."
-5. **A/B Testing** — "So here's the intervention, tested properly." *Show the confidence
-   interval, then the power analysis.* "Significant, adequately powered, and the lift is
-   commercially meaningful. That's an adopt."
-6. **Data Quality** — "And underneath all of it, this is why I trust the numbers." *Show
-   bronze vs silver.*
-7. **Insights** — "Everything consolidated, with limitations stated."
+1. **Home** — "Two data sources, and I label which is which." *Point at the callout.*
+2. **Real-World SCMS** — "This is 10,324 actual USAID shipments." Show the KPI band,
+   then the **mode trade-off chart**: "ocean is six times cheaper per kilo and eight
+   points less reliable — that's the sourcing decision in one picture."
+3. **Real-World SCMS → Vendors tab** — "I expected a bad manufacturer. It's their own
+   RDC channel, 82.9% on-time on a billion dollars."
+4. **Real-World SCMS → Data Provenance** — "And here's why I trust it: every ambiguous
+   value has a reason code. `N/A - From RDC` isn't missing data, it's a shipment that
+   never had a purchase order."
+5. **ML Models → Late Delivery** — "Trained on those real shipments. AUC 0.84, but
+   accuracy is below baseline." *Then show the gains curve.* "Top 20% by risk catches
+   61% of late deliveries. That's the deployable artefact."
+6. **Data Quality** — "The generic profiler scores that real file 99.3% complete and
+   grade A. It's wrong, and this table shows why." *(Best single slide in the deck.)*
+7. **Funnel Analytics** — "This half is simulated, and labelled as such — it covers
+   manufacturing, which SCMS doesn't reach." Show the bottleneck ranking.
+8. **A/B Testing** — "And here's how I'd decide whether a fix is worth the capital."
+   *Show the CI, then power.*
 
-If they interrupt with questions, let the demo go where they want. Curiosity is a
-buying signal.
-
----
+If they interrupt with questions, follow them. Curiosity is a buying signal.
 
 ## 6. Résumé bullets
 
-Grounded in what the project actually does:
+Grounded in what the project actually does, leading with the real data:
 
-> - Performed pharmaceutical supply chain funnel analysis across procurement,
->   manufacturing, quality assurance, warehousing, distribution and pharmacy delivery
->   using **Python (Pandas, Plotly)**, identifying quality testing as the primary
->   bottleneck driving ~37% end-to-end unit loss and quantifying $127M of value at risk.
-> - Built an end-to-end **machine learning pipeline** for drug classification and batch
->   stability risk prediction — group-wise missing-value imputation, feature
->   engineering, grid-searched model selection across Decision Tree, Random Forest and
->   XGBoost under stratified cross-validation — reaching 0.99 macro F1 on clinical
->   classification with serialised **scikit-learn** pipelines.
-> - Designed and executed **A/B experiments** on four supply chain interventions,
->   applying **Chi-Square tests, two-proportion z-tests and Welch's t-tests (SciPy)**
->   with power analysis and practical-significance thresholds, surfaced through a
->   12-page interactive **Streamlit** dashboard backed by 99 automated tests.
-
----
+> - Analysed **10,324 real USAID pharmaceutical shipments** (43 countries, 73 vendors,
+>   $1.63B commodity value) using **Python (Pandas, Plotly)**, building a procurement
+>   funnel and vendor scorecard that identified an internal distribution channel — not
+>   an external supplier — as the weakest link at 82.9% on-time across $1.09B of product.
+> - Built an end-to-end **machine learning pipeline** across three models — drug
+>   classification, batch stability risk, and late-delivery prediction on real shipment
+>   data — with group-wise imputation, leakage-controlled feature engineering and
+>   grid-searched selection across Decision Tree, Random Forest and XGBoost under
+>   stratified cross-validation (**ROC AUC 0.84**; top-20% risk targeting captures 61%
+>   of late deliveries, a 3× lift).
+> - Designed and executed **A/B experiments** on four supply chain interventions using
+>   **Chi-Square tests, two-proportion z-tests and Welch's t-tests (SciPy)** with power
+>   analysis and practical-significance gating, delivered through a 13-page interactive
+>   **Streamlit** dashboard backed by 131 automated tests.
 
 ## 7. Things not to do
 
-**Don't call the data real.** If it comes up later that you implied it, everything else
-you said becomes suspect. Lead with it instead — it's a strength.
+**Don't blur real and simulated.** Two datasets are genuinely real; the
+manufacturing telemetry is not. Say which is which before you're asked — being caught
+conflating them costs you far more than volunteering it ever could.
 
-**Don't say "99% accuracy" as your headline.** On a 200-row dataset with a
-deterministic rule, an experienced interviewer hears that as naivety. Lead with the
-funnel finding and the experiments.
+**Don't lead with accuracy on either model.** On the clinical model it's a 200-row dataset with a deterministic rule; on the
+late-delivery model accuracy is literally worse than doing nothing. Lead with the RDC
+finding and the gains curve.
 
 **Don't list the tech stack unprompted.** "I used Pandas, NumPy, scikit-learn,
 XGBoost…" tells them nothing. They can read the README. Talk about the *problem*.

@@ -45,7 +45,7 @@
       "test_f1_macro": 0.9877,
       "test_precision": 0.9917,
       "test_recall": 0.9846,
-      "fit_seconds": 7.81
+      "fit_seconds": 16.66
     },
     {
       "model": "random_forest",
@@ -55,7 +55,7 @@
       "test_f1_macro": 1.0,
       "test_precision": 1.0,
       "test_recall": 1.0,
-      "fit_seconds": 8.3
+      "fit_seconds": 13.18
     },
     {
       "model": "xgboost",
@@ -65,7 +65,7 @@
       "test_f1_macro": 0.9596,
       "test_precision": 0.96,
       "test_recall": 0.9667,
-      "fit_seconds": 5.43
+      "fit_seconds": 9.24
     }
   ],
   "features": [
@@ -470,7 +470,7 @@
   "test_rows": 50,
   "test_size": 0.25,
   "random_seed": 42,
-  "trained_at": "2026-08-01T21:18:34+00:00",
+  "trained_at": "2026-08-01T22:50:41+00:00",
   "platform_version": "1.0.0",
   "feature_engineering": {}
 }

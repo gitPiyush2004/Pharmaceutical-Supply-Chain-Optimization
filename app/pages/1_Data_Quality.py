@@ -34,7 +34,7 @@ page_setup(
     subtitle="Profiling the bronze extract, and measuring what cleaning recovered",
 )
 
-DATASETS = ["batches", "shipments", "inventory", "demand", "drug200"]
+DATASETS = ["scms", "batches", "shipments", "inventory", "demand", "drug200"]
 
 
 @st.cache_data(show_spinner="Auditing datasets...")
@@ -44,7 +44,11 @@ def _scoreboard(raw: bool):
 
 @st.cache_data(show_spinner="Comparing layers...")
 def _uplift():
-    return dq.quality_uplift()
+    # SCMS is excluded: its remediation is handled by the dedicated parser in
+    # `src.data.scms`, not by the generic bronze/silver cleaning layer, so a
+    # before/after score here would compare it against a no-op and read as
+    # "cleaning added nothing". Its provenance is reported separately above.
+    return dq.quality_uplift([d for d in DATASETS if d != "scms"])
 
 
 @st.cache_data(show_spinner=False)
@@ -121,9 +125,52 @@ chart(charts.heatmap(heat, title="Raw Extract Score by Dimension (0-100)",
 # Detected versus injected
 # ---------------------------------------------------------------------------
 section(
+    "Real Data: Where Generic Profiling Falls Short",
+    "The most instructive table on this page. The real USAID SCMS export scores "
+    "99.3% complete — and that number is misleading.",
+)
+
+
+@st.cache_data(show_spinner=False)
+def _scms_parsing():
+    from src.data.scms import parsing_report
+
+    return parsing_report()
+
+
+scms_parsing = _scms_parsing()
+show_table(scms_parsing, height=280)
+
+worst_field = scms_parsing.iloc[0]
+callout(
+    f"A standard completeness check sees no problem with the SCMS file, because "
+    f"its defects are **semantic, not structural**. `{worst_field['field']}` is "
+    f"only **{worst_field['parsed_pct']:.0f}% usable**, yet a null check passes it: "
+    "the unusable values are strings like `N/A - From RDC`, `Pre-PQ Process`, "
+    "`Freight Included in Commodity Cost` and `See DN-304 (ID#:10589)` sitting in "
+    "text columns. They are perfectly non-null and completely unparseable.\n\n"
+    "This is the difference between profiling *types* and profiling *meaning*. A "
+    "generic profiler scores this file grade A. Type-aware parsing shows that "
+    "55% of purchase-order dates and 40% of freight costs cannot be used as "
+    "numbers or dates at all.",
+    kind="warning", title="Why the 99.3% completeness score is misleading",
+)
+insight(
+    "The right response is not to impute those values. `N/A - From RDC` is a "
+    "**structural absence** — it correctly records that no vendor purchase order "
+    "existed because the goods came from regional distribution centre stock. "
+    "Imputing it would fabricate purchase orders. `Freight Included in Commodity "
+    "Cost` is not a missing price either; it says the cost is recorded elsewhere. "
+    "Each gets a reason code and is excluded from the affected statistic, which is "
+    "why every lead-time figure on the Real-World SCMS page reports the "
+    "denominator it actually used."
+)
+
+section(
     "Detected versus Injected Defects",
-    "The generator records every defect it introduces. Comparing that log against "
-    "what the profiler found is a direct test that the quality module works.",
+    "For the simulated tables, the generator records every defect it introduces. "
+    "Comparing that log against what the profiler found is a direct test that the "
+    "quality module works.",
 )
 
 col1, col2 = st.columns(2, gap="large")

@@ -11,10 +11,10 @@ any layer can be tested in isolation and the analytics can be used from a notebo
 a CLI script or the dashboard without change.
 
 ```
-Presentation   app/                     Streamlit pages
+Presentation   app/                     Streamlit pages (13)
 Visualisation  src/viz/                 theme + chart builders
 Analytics/ML   src/analytics/, src/ml/, src/quality/
-Data           src/data/                generator, cleaning, loader, database
+Data           src/data/                scms (REAL), generator, cleaning, loader, database
 Foundation     src/config.py, src/logger.py, config/config.yaml
 ```
 
@@ -28,7 +28,15 @@ under pytest, and callable from a future API without a rewrite.
 ## Data flow
 
 ```
-data/raw/drug200.csv ─────────────────────┐   (real Kaggle data, never modified)
+data/external/SCMS_*.csv ─────────────────┐   (REAL USAID data, 10,324 shipments)
+  │  src/data/scms.py                      │
+  │    mixed-format date parsing           │
+  │    business-string numeric parsing     │
+  │    reason codes: parsed / structural / │
+  │      missing / cross_reference         │
+  └──────────────────────────────────────► │  consumed by src/analytics/procurement.py
+                                           │  and the late_delivery model
+data/raw/drug200.csv ─────────────────────┤   (real Kaggle data, never modified)
                                           │
 src/data/generator.py                     │
   │  seeded, calibrated digital twin       │
@@ -84,6 +92,7 @@ plus data, not a refactor.
 
 | Module | Responsibility |
 |---|---|
+| `scms.py` | **Real data.** Loads and parses the USAID SCMS delivery history; classifies every ambiguous value with a reason code; derives delivery, lead-time and freight metrics |
 | `generator.py` | Builds the digital twin: three dimensions, four facts. Encodes four structural signals. Injects realistic defects and logs what it injected |
 | `cleaning.py` | Promotes bronze to silver in six ordered steps; returns a remediation log |
 | `loader.py` | Cached access to any table in either layer; auto-generates data if missing |
@@ -106,6 +115,7 @@ it injected, giving a ground-truth test of the profiler.
 
 | Module | Key outputs |
 |---|---|
+| `procurement.py` | **Real data.** Procurement milestone coverage, lead-time breakdown, vendor/country/region/mode scorecards, freight economics, delivery trend |
 | `funnel.py` | Stage conversion, drop-off, dwell time, bottleneck ranking with severity scoring, loss attribution, QA root causes, quarterly trend |
 | `inventory.py` | Turnover, ABC classification, stock-out / overstock / expiry registers, warehouse utilisation |
 | `shipments.py` | Supplier scorecard, regional and carrier performance, transit-time distribution, late-shipment analysis |
@@ -124,7 +134,7 @@ through, with no duplicate filtering logic in the analytics layer.
 | Module | Responsibility |
 |---|---|
 | `preprocess.py` | Cleaning, categorical normalisation, feature engineering, column groups, `ColumnTransformer` construction, stratified splitting |
-| `train.py` | Grid search across three algorithms under stratified CV, evaluation (confusion matrix, ROC/PR, per-class report), feature importance, artefact persistence |
+| `train.py` | Grid search across three algorithms under stratified CV for each of the three models, evaluation (confusion matrix, ROC/PR, per-class report), feature importance, artefact persistence |
 | `predict.py` | Loads artefacts, validates input, returns prediction + probabilities + a human-readable explanation |
 
 **One pipeline object.** Imputation, encoding, scaling and the estimator live inside a
@@ -180,6 +190,27 @@ supplier, not the batch, so the true value is *knowable* and is restored by look
 from the dimension table. Preferring repair over imputation wherever the value is
 recoverable is the general principle. Tests assert both behaviours.
 
+### 2b. Structural absence is not missing data
+
+The single most consequential decision in the real-data layer. `N/A - From RDC`
+appears in the purchase-order date column on 5,404 of 10,324 line items. It is not a
+gap: it correctly records that no vendor purchase order existed, because those goods
+were drawn from regional distribution centre stock.
+
+Imputing it would fabricate 5,404 purchase orders and corrupt every lead-time
+statistic downstream. So `src/data/scms.py` attaches a reason code to every value it
+cannot parse — `structural`, `missing`, `cross_reference` or `unparseable` — and the
+analytics exclude structural absences rather than filling them. Every function that
+reports a lead time also reports the denominator it used.
+
+The same logic applies to `Freight Included in Commodity Cost` (a real cost recorded
+elsewhere, not a zero) and `See DN-304 (ID#:10589)` (a pointer to another row).
+
+A related finding worth stating: a generic completeness check scores this file 99.3%
+complete and grade A, because all of these are non-null strings in text columns.
+Type-aware parsing shows 55% of purchase-order dates and 40% of freight costs are
+unusable. Profiling types is not the same as profiling meaning.
+
 ### 3. Model selection on cross-validated score, never on the test set
 
 Three algorithms are grid searched under identical stratified 5-fold CV, and the
@@ -228,7 +259,7 @@ presented as a queueing simulation.
 
 ## Testing strategy
 
-99 tests, ~8 seconds. Structured around invariants rather than implementation
+131 tests, ~9 seconds. Structured around invariants rather than implementation
 details, because the failure mode that matters is a plausible-but-wrong dashboard.
 
 | Suite | What it protects |
@@ -236,6 +267,7 @@ details, because the failure mode that matters is a plausible-but-wrong dashboar
 | `test_data_layer.py` | Config completeness and normalised weights; **generation determinism** (byte-identical under the same seed); funnel volume monotonicity; stage date ordering; calibration bounds; the four planted structural signals; that bronze really is dirty and silver really is clean; grouped-imputation semantics; cleaning idempotence |
 | `test_analytics.py` | Conversion reconciling with raw units; drop-off complementing conversion; shares summing to 100; ABC thresholds; turnover/days-of-inventory reciprocity; forecasts landing in the future; decomposition reconstructing the series; **a hand-computed z-test anchor**; χ² ≈ z²; power rising with sample size; simulation directionality |
 | `test_ml_and_quality.py` | Preprocessing normalisation and reproducible splits; artefact completeness; accuracy floors; **batch risk beating the majority-class baseline**; confusion-matrix totals matching test rows; importances summing to 1; known clinical rules reproduced from real drug200 rows; input validation; that the profiler finds the injected defects; that cleaning improves every table; that `drug200.csv` is never modified |
+| `test_scms_real_data.py` | **Real data.** Published row count and scale; that cleaning never drops a shipment; mixed-format date parsing; that structural absences stay null and labelled; that reason codes partition every row; that parsed numerics are plain float64; the documented 44% PO coverage and 88.5% on-time rate; small-sample exclusion from scorecards; the RDC-is-worst and ocean-vs-air findings; **that the late-delivery model uses no leaking feature and no high-cardinality identifier**; that its gains curve is monotonic and beats random |
 
 Two testing choices worth naming:
 
@@ -261,6 +293,7 @@ The dashboard is separately smoke-tested through Streamlit's `AppTest` harness �
 | A model algorithm | `config.ml.*.models` + `param_grid` + a branch in `train.get_model` |
 | A simulation lever | `config.simulation.levers` + an elasticity in `config.simulation.elasticity` |
 | A dashboard page | A file in `app/pages/`, composed from `src.dashboard.components` |
+| A real-data source | A parser in `src/data/`, an accessor in `loader.py`, an entry in `config.datasets` |
 
 Most extensions are configuration edits, which is the point of pushing every constant
 into `config.yaml`.

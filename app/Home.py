@@ -61,10 +61,21 @@ summary, bottlenecks, losses = _funnel_views()
 # ---------------------------------------------------------------------------
 # Executive KPI band
 # ---------------------------------------------------------------------------
+callout(
+    "This platform runs on **two data sources, and labels which is which "
+    "everywhere**. The *Real-World SCMS* page and the late-delivery model use "
+    "genuine USAID operational data: 10,324 actual shipments to 43 countries, "
+    "2006-2015. The manufacturing funnel, stability and inventory pages use a "
+    "seeded digital twin, because no public dataset carries per-batch storage "
+    "telemetry. The clinical model uses the real Kaggle drug200 dataset.",
+    kind="insight", title="Real data and simulated data",
+)
+
 section(
     "Executive Summary",
     "Network-wide performance across the batch lifecycle, from API procurement "
-    "to the unit reaching a patient.",
+    "to the unit reaching a patient. Figures on this page come from the simulated "
+    "manufacturing twin; see the Real-World SCMS page for measured operations.",
 )
 
 kpi_row([
@@ -196,9 +207,12 @@ with col2:
 with col3:
     st.markdown("""
 **Machine learning**
-- **Drug Classification** - patient-level prescribing model on the Kaggle
-  drug200 dataset
-- **Batch Risk** - stability risk classifier on batch telemetry
+- **Drug Classification** - prescribing model on the real Kaggle drug200 dataset
+- **Batch Risk** - stability risk classifier on simulated telemetry
+- **Late Delivery** - trained on 10,324 real USAID shipments
+
+**Real-world data**
+- **Real-World SCMS** - measured procurement, vendor and logistics performance
 
 **Reference**
 - **Insights** - the consolidated recommendation set with quantified impact
@@ -211,12 +225,15 @@ systems hand over, complete with sensor dropouts and free-text region spellings)
 from a *silver* layer (deduplicated, canonicalised and imputed) that every
 analytics module reads. The Data Quality page shows both.
 
-**Two datasets, one business.** `drug200.csv` is the real Kaggle clinical dataset
-used for the prescribing model. The supply chain tables are a seeded digital twin
-whose product mix is derived from the prescription distribution observed in
-`drug200.csv`, so both halves describe the same portfolio. Stage yields, QC
-release times and OTIF levels are calibrated to published industry benchmarks and
-declared in `config/config.yaml`.
+**Three datasets - two real, one simulated.** The **USAID SCMS delivery history**
+(10,324 actual shipments to 43 countries, 2006-2015) is genuine open operational
+data, and drives every procurement, vendor and logistics metric plus the
+late-delivery model. `drug200.csv` is the real Kaggle clinical dataset behind the
+prescribing model. The **manufacturing tables are a seeded digital twin**, because
+SCMS records procurement and logistics but not manufacturing, and no public dataset
+carries per-batch storage telemetry. Its product mix is derived from the
+prescription distribution in `drug200.csv`, and its stage yields and QC release
+times are calibrated to published benchmarks declared in `config/config.yaml`.
 
 **Reproducibility.** Everything is deterministic. `python scripts/build_dataset.py`
 followed by `python scripts/train_models.py` regenerates every number on this

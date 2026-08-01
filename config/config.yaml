@@ -27,6 +27,7 @@ paths:
 
 datasets:
   drug200: "data/raw/drug200.csv"
+  scms: "data/external/SCMS_Delivery_History_Dataset.csv"
   batches: "data/raw/supply_chain_batches.csv"
   shipments: "data/raw/supply_chain_shipments.csv"
   inventory: "data/raw/supply_chain_inventory.csv"
@@ -254,6 +255,53 @@ shipments:
   on_time_grace_days: 0
   otif_target_pct: 95.0
   supplier_tiers: {Preferred: 92, Approved: 85, Watchlist: 0}
+
+# -----------------------------------------------------------------------------
+# SCMS - the real USAID delivery history dataset
+# -----------------------------------------------------------------------------
+scms:
+  # Minimum shipments before a vendor, country or lane is scored. Below this the
+  # rate is too noisy to act on: a vendor with 3 shipments and 1 late delivery
+  # would otherwise appear worse than one with 500 shipments at 90% on-time.
+  min_shipments_for_scoring: 30
+  on_time_target_pct: 90.0
+  # Freight as a share of commodity value is extremely right-skewed on real data
+  # (tiny line values produce four-digit percentages), so summaries use the
+  # median and charts clip the display range.
+  freight_pct_display_cap: 100.0
+  # The real procurement funnel, in milestone order.
+  funnel_stages:
+    - Price Quote Sent
+    - PO Sent to Vendor
+    - Scheduled for Delivery
+    - Delivered to Client
+    - Delivery Recorded
+  late_delivery_model:
+    target: "is_late"
+    test_size: 0.25
+    cv_folds: 5
+    # Macro F1 rather than ROC AUC: it is the metric the other two models are
+    # selected on, so all three stay directly comparable, and it handles the
+    # 88.5/11.5 class imbalance by weighting both classes equally. ROC AUC is
+    # still computed and reported in the evaluation block.
+    scoring: "f1_macro"
+    numeric_features:
+      - quantity
+      - line_value_usd
+      - unit_price_usd
+      - units_per_pack
+      - weight_kg
+      - freight_cost_usd
+      - scheduled_lead_time_days
+    categorical_features:
+      - shipment_mode
+      - product_group
+      - sub_classification
+      - region
+      - fulfil_via
+      - inco_term
+      - managed_by
+      - first_line_designation
 
 # -----------------------------------------------------------------------------
 # Demand forecasting

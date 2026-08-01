@@ -39,9 +39,13 @@ page_setup(
 )
 
 MODELS = {
-    "Drug Classification (clinical)": "drug_classification",
-    "Batch Risk (supply chain)": "batch_risk",
+    "Drug Classification (real clinical data)": "drug_classification",
+    "Batch Risk (simulated telemetry)": "batch_risk",
+    "Late Delivery (real SCMS data)": "late_delivery",
 }
+
+#: Which models are trained on genuine observations rather than the digital twin.
+REAL_DATA_MODELS = {"drug_classification", "late_delivery"}
 
 
 @st.cache_data(show_spinner=False)
@@ -68,6 +72,20 @@ choice = st.radio("Model", list(available), horizontal=True)
 key = available[choice]
 meta = _summary(key)
 metrics = meta["metrics"]
+
+if key in REAL_DATA_MODELS:
+    source = ("Kaggle drug200 clinical dataset (200 patients)"
+              if key == "drug_classification"
+              else "USAID SCMS delivery history (10,324 real shipments, 43 countries)")
+    callout(f"Trained on **real data**: {source}.", kind="success",
+            title="Data provenance")
+else:
+    callout(
+        "Trained on the **simulated** digital twin. No public dataset carries "
+        "per-batch storage telemetry, so this model demonstrates the pipeline "
+        "rather than a finding about a real operation.",
+        kind="warning", title="Data provenance",
+    )
 
 # ---------------------------------------------------------------------------
 # Headline metrics
@@ -168,7 +186,7 @@ with tabs[4]:
             "remaining four drugs. The model recovering that structure is a "
             "correctness check, not a coincidence."
         )
-    else:
+    elif key == "batch_risk":
         insight(
             "**Thermal load** - the engineered interaction of excess temperature "
             "and exposure time - is the strongest single predictor, ahead of raw "
@@ -176,6 +194,16 @@ with tabs[4]:
             "on temperature *and* time together, not either alone. Cycle time and "
             "QA delay follow, which is why compressing quality testing improves "
             "stability as well as throughput."
+        )
+    else:
+        insight(
+            "**Fulfilment route and INCO term dominate** - ahead of transport mode "
+            "or destination. The model learned from real shipments that *how* an "
+            "order is placed and who bears the delivery obligation predicts "
+            "lateness better than the physical journey does. That corroborates the "
+            "vendor scorecard independently: the regional distribution centre "
+            "channel is the weakest link at 82.9% on-time, and the model found it "
+            "without being told."
         )
 
 # ---------------------------------------------------------------------------
@@ -207,6 +235,82 @@ if key == "drug_classification":
                                    title="Class Probabilities",
                                    text_format=".3f", height=300))
         callout(result["explanation"], kind="insight", title="Why this recommendation")
+
+elif key == "late_delivery":
+    st.markdown("**Score a planned shipment for late-delivery risk**")
+    c1, c2, c3, c4 = st.columns(4)
+    mode = c1.selectbox("Transport Mode", ["Air", "Truck", "Air Charter", "Ocean", "Unknown"])
+    fulfil = c2.selectbox("Fulfilment Route", ["From RDC", "Direct Drop"])
+    inco = c3.selectbox("INCO Term", ["N/A - From RDC", "EXW", "DDP", "FCA", "CIP",
+                                      "DDU", "CIF", "DAP"])
+    region = c4.selectbox("Destination Region",
+                          ["West & Central Africa", "Southern Africa", "East Africa",
+                           "Latin America & Caribbean", "Asia", "Central Asia",
+                           "Middle East & North Africa"])
+    c5, c6, c7, c8 = st.columns(4)
+    group = c5.selectbox("Product Group", ["ARV", "HRDT", "ACT", "MRDT", "ANTM"])
+    sub = c6.selectbox("Sub Classification",
+                       ["Adult", "Pediatric", "HIV test", "HIV test - Ancillary",
+                        "ACT", "Malaria"])
+    managed = c7.selectbox("Managed By", ["PMO - US", "South Africa Field Office",
+                                          "Haiti Field Office", "Ethiopia Field Office"])
+    first_line = c8.selectbox("First Line Designation", ["Yes", "No"])
+    c9, c10, c11, c12 = st.columns(4)
+    qty = c9.number_input("Quantity", 1, 5_000_000, 20_000, 1000)
+    value = c10.number_input("Line Value (USD)", 1.0, 5_000_000.0, 80_000.0, 1000.0)
+    weight = c11.number_input("Weight (kg)", 1.0, 100_000.0, 800.0, 10.0)
+    lead = c12.number_input("Planned Lead Time (days)", -30, 800, 160, 5)
+
+    if st.button("Score shipment", type="primary"):
+        result = predict.predict_late_delivery(
+            quantity=qty, line_value_usd=value, unit_price_usd=value / max(qty, 1),
+            units_per_pack=60, weight_kg=weight,
+            freight_cost_usd=value * 0.11, scheduled_lead_time_days=lead,
+            shipment_mode=mode, product_group=group, sub_classification=sub,
+            region=region, fulfil_via=fulfil, inco_term=inco,
+            managed_by=managed, first_line_designation=first_line)
+        left, right = st.columns([1, 2], gap="large")
+        with left:
+            st.markdown(f"### {result['risk_band']} Risk")
+            st.markdown(verdict_badge(
+                {"High": "High", "Elevated": "Medium", "Low": "Low"}[result["risk_band"]]),
+                unsafe_allow_html=True)
+            st.metric("Probability of late delivery",
+                      fmt_pct(result["late_probability"] * 100, 1))
+        with right:
+            callout(result["explanation"],
+                    kind="danger" if result["risk_band"] == "High"
+                    else "warning" if result["risk_band"] == "Elevated" else "insight",
+                    title="Risk assessment")
+
+    # --- The metric that actually matters for this model --------------------
+    section(
+        "Operational Targeting",
+        "Accuracy is the wrong metric on an 88.5/11.5 split - always predicting "
+        "'on time' scores 88.5% and is useless. What matters is ranking: given "
+        "capacity to review a fraction of shipments, how many late ones surface?",
+    )
+    gains = predict.late_delivery_targeting_curve()
+    col1, col2 = st.columns([3, 2], gap="large")
+    with col1:
+        chart(charts.line_chart(gains, x="targeted_pct",
+                                y=["capture_rate_pct", "precision_pct"],
+                                title="Gains Curve on Held-Out Test Data",
+                                y_title="Percent", height=380))
+    with col2:
+        show_table(gains, height=320)
+
+    at20 = gains[gains["targeted_pct"] == 20.0].iloc[0]
+    insight(
+        f"Reviewing the **top {at20['targeted_pct']:.0f}% of shipments by predicted "
+        f"risk captures {at20['capture_rate_pct']:.0f}% of all late deliveries** - "
+        f"a lift of {at20['lift']:.1f}x over reviewing at random. That is how this "
+        "model should be deployed: as a prioritisation queue for expeditors, not "
+        "as a yes/no gate. At the default 0.5 threshold it flags only 27% of late "
+        "shipments and its raw accuracy sits marginally *below* the majority-class "
+        "baseline — which is exactly why the threshold, not the model, is the thing "
+        "to tune here."
+    )
 
 else:
     c1, c2, c3, c4 = st.columns(4)
@@ -248,30 +352,86 @@ else:
                 else "insight", title="Risk drivers")
 
 # ---------------------------------------------------------------------------
+_FEATURE_NOTES = {
+    "drug_classification": (
+        "- `bp_risk_score`, `cholesterol_risk`, `combined_risk_score` - ordinal "
+        "encodings of clinical severity, which trees split on more cleanly than "
+        "one-hot dummies.\n"
+        "- `high_na_to_k` - binary flag at the clinically meaningful ratio "
+        "threshold.\n"
+        "- `age_group`, `na_to_k_band` - banded versions so splits fall on "
+        "clinically natural boundaries."
+    ),
+    "batch_risk": (
+        "- `thermal_load` - degrees above the labelled storage limit multiplied by "
+        "exposure days. Degradation depends on temperature and time jointly, so "
+        "the interaction is given to the model explicitly rather than left to be "
+        "discovered.\n"
+        "- `humidity_excess` - relative humidity above the moisture uptake "
+        "threshold.\n"
+        "- `cycle_time_ratio` - cycle time relative to the network median."
+    ),
+    "late_delivery": (
+        "- `scheduled_lead_time_days` - the *planned* quote-to-scheduled interval. "
+        "This is the only lead-time measure safe to use: every other one is "
+        "derived from the delivery date and would leak the answer.\n"
+        "- `region` - the 43 destination countries grouped into seven regions, "
+        "because country-level one-hot encoding on 43 categories invites "
+        "memorisation.\n"
+        "- Vendor and manufacturing site are **deliberately excluded**. With 73 "
+        "vendors, several appearing a handful of times, encoding vendor identity "
+        "would let the model memorise suppliers instead of learning transferable "
+        "structure - and it could not score a vendor it had never seen."
+    ),
+}
+
+_LIMITATIONS = {
+    "drug_classification": (
+        "The clinical dataset has only 200 rows and an almost deterministic "
+        "decision rule, so near-perfect scores are expected and are not evidence "
+        "of a hard problem being solved. The value here is pipeline rigour, not "
+        "model heroics."
+    ),
+    "batch_risk": (
+        "Macro F1 of ~0.70 on three imbalanced risk tiers reflects genuine "
+        "irreducible noise: the label depends partly on QA outcomes that are "
+        "stochastic by construction. A higher score would indicate leakage rather "
+        "than skill. This model is also trained on simulated telemetry, so it "
+        "demonstrates method rather than a real finding."
+    ),
+    "late_delivery": (
+        "Raw accuracy (0.879) sits marginally **below** the majority-class "
+        "baseline (0.885), because only 11.5% of real shipments are late. That is "
+        "not a failure - it means accuracy is the wrong metric. ROC AUC of 0.84 "
+        "and a 3x lift at the top 20% show the model ranks risk well; it should be "
+        "deployed as a prioritisation queue, not a binary gate. The data also ends "
+        "in 2015, so the learned relationships describe that era's network."
+    ),
+}
+
 methodology(f"""
 **Pipeline.** A single sklearn `Pipeline` holds imputation, encoding, scaling and
 the estimator, so the serialised `.joblib` needs no separate transformer at serving
 time and train/serve skew is structurally impossible.
 
 **Steps.** Median imputation for numerics and most-frequent for categoricals →
-one-hot encoding (unknown categories ignored, so an unseen region cannot crash
+one-hot encoding (unknown categories ignored, so an unseen category cannot crash
 serving) → standard scaling for numerics → estimator.
 
 **Feature engineering.**
-{"- `bp_risk_score`, `cholesterol_risk`, `combined_risk_score` - ordinal encodings of clinical severity.\\n- `high_na_to_k` - binary flag at the clinically meaningful ratio threshold.\\n- `age_group`, `na_to_k_band` - banded versions that let tree models split on clinically natural boundaries."
-if key == "drug_classification" else
-"- `thermal_load` - degrees above the labelled storage limit multiplied by exposure days. Degradation depends on temperature and time jointly, so the interaction is given to the model explicitly rather than left to be discovered.\\n- `humidity_excess` - relative humidity above the moisture uptake threshold.\\n- `cycle_time_ratio` - cycle time relative to the network median."}
+{_FEATURE_NOTES.get(key, "")}
 
 **Selection.** Stratified {meta['cv_folds']}-fold cross-validation with
 `{meta['cv_scoring']}` as the scoring metric, grid-searched per algorithm. Macro F1
 is used rather than accuracy because the classes are imbalanced and every class
-matters equally. The test set is touched exactly once, to report.
+matters equally. All three models are selected under the same rules, which is what
+makes their numbers comparable. The test set is touched exactly once, to report.
 
 **Reproducibility.** `random_seed={meta['random_seed']}` throughout;
 `test_size={meta['test_size']}`; trained at {meta['trained_at']} on platform
 version {meta['platform_version']}.
 
-**Honest limitation.** {"The clinical dataset has only 200 rows and an almost deterministic decision rule, so near-perfect scores are expected and are not evidence of a hard problem being solved. The value here is pipeline rigour, not model heroics." if key == "drug_classification" else "Macro F1 of ~0.70 on three imbalanced risk tiers reflects genuine irreducible noise: the label depends partly on QA outcomes that are stochastic by construction. A higher score would indicate leakage rather than skill."}
+**Honest limitation.** {_LIMITATIONS.get(key, "")}
 """)
 
 sidebar_about()

@@ -2,15 +2,16 @@
 
 ### Funnel Analytics, A/B Testing & Machine Learning
 
-An end-to-end analytics platform that traces pharmaceutical batches through eight
-supply chain stages, finds where volume and value leak, and tests which
-interventions actually recover it.
+An end-to-end analytics platform built on **10,324 real USAID pharmaceutical
+shipments** plus a calibrated manufacturing simulation — finding where volume and
+value leak across the supply chain, and testing which interventions actually
+recover it.
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.32%2B-FF4B4B)](https://streamlit.io/)
 [![scikit-learn](https://img.shields.io/badge/scikit--learn-1.3%2B-F7931E)](https://scikit-learn.org/)
 [![XGBoost](https://img.shields.io/badge/XGBoost-2.0%2B-006400)](https://xgboost.readthedocs.io/)
-[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-131%20passing-brightgreen)](tests/)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gitPiyush2004/Pharmaceutical-Supply-Chain-Optimization/blob/main/notebooks/pharmaceutical_ml_pipeline.ipynb)
 
 ---
@@ -30,17 +31,27 @@ This platform answers all three, and keeps the distinction between what was
 
 ## Headline findings
 
+### From real data (USAID SCMS — 10,324 actual shipments)
+
 | Finding | Evidence | Recommended action |
 |---|---|---|
-| **Quality Testing is the binding constraint** — simultaneously the largest unit-loss stage and the slowest (~19 days, ~28 with investigation) | Funnel bottleneck ranking | In-line Process Analytical Technology; **validated by A/B test** |
-| **Two API suppliers drive disproportionate batch rejection** (78% vs 96% QA pass rate) | Supplier scorecard + QA root-cause analysis | Re-qualify or exit; consolidate onto preferred vendors |
-| **Cold-chain excursions cost ~4.7 pp of potency** (p < 0.001, large effect size) | Welch's t-test on 2,400 batches | IoT telemetry with real-time alerting; **validated by A/B test** |
-| **Loss is concentrated, not uniform** — top 3 product-region pairs carry a disproportionate share | Pareto on value lost | Target specific lanes, not a network-wide programme |
-| **Storage conditions predict batch risk** (macro F1 ≈ 0.70, `thermal_load` dominant) | XGBoost on batch telemetry | Score batches at packaging; prioritise inspection |
+| **The weakest supplier is an internal channel, not a manufacturer** — "SCMS from RDC" delivers 82.9% on-time across $1.09B of commodity value | Vendor scorecard, 73 real vendors | Fixable without renegotiating a single external contract |
+| **Ocean freight is 6× cheaper per kg than air and 8 pp less reliable** ($1.68 vs $10.02/kg; 82.5% vs 90.4% on-time) | Mode analysis across 10,324 shipments | Pay for reliability only where shelf life or stock-out risk justifies it |
+| **Only 44% of line items are traceable to a vendor purchase order** | Procurement milestone coverage | Not a data gap — 5,404 shipments bypass vendor ordering via RDC stock |
+| **61% of shipments arrive on exactly the scheduled date, 27% early, 11.5% late** | Delivery timing distribution | Manage the late tail; the headline on-time figure overstates planning precision |
+| **Late delivery is predictable enough to triage** — ROC AUC 0.84; reviewing the top 20% by risk catches 61% of late shipments (3.0× lift) | XGBoost on real shipments, held-out test | Deploy as an expeditor priority queue, not a yes/no gate |
 
-**End-to-end yield is ~63%** against ~$127M of value lost across the modelled
-period. Four interventions were tested; the ones clearing statistical significance,
-adequate power *and* practical significance are flagged for adoption.
+### From the manufacturing simulation
+
+| Finding | Evidence | Recommended action |
+|---|---|---|
+| **Quality Testing is the binding constraint** — largest unit-loss stage *and* slowest (~19 days, ~28 with investigation) | Funnel bottleneck ranking | In-line Process Analytical Technology; **validated by A/B test** |
+| **Cold-chain excursions cost ~4.7 pp of potency** (p < 0.001, large effect size) | Welch's t-test on 2,400 batches | IoT telemetry with real-time alerting; **validated by A/B test** |
+| **Loss is concentrated, not uniform** | Pareto on value lost | Target specific lanes, not a network-wide programme |
+
+Simulated end-to-end yield is ~63% against ~$127M of modelled value lost. Four
+interventions were A/B tested; those clearing statistical significance, adequate
+power *and* practical significance are flagged for adoption.
 
 ---
 
@@ -49,7 +60,39 @@ adequate power *and* practical significance are flagged for adoption.
 All figures below are produced by the platform itself — the same chart builders the
 dashboard renders — and regenerate from a clean checkout.
 
-### The funnel: where volume goes
+### Real data: USAID SCMS
+
+The cost-versus-service frontier, measured rather than assumed. Ocean is cheapest
+per kilogram and least reliable; air is the reverse:
+
+![Mode trade-off](docs/images/scms_mode_tradeoff.png)
+
+The weakest supplier is the internal RDC channel, not an external manufacturer:
+
+![Vendor scorecard](docs/images/scms_vendor_scorecard.png)
+
+| Delivery timing | Regional performance |
+|---|---|
+| ![Delay distribution](docs/images/scms_delay_distribution.png) | ![Region](docs/images/scms_region.png)  |
+
+Procurement traceability — only 44% of line items reach a vendor purchase order,
+and that is a process fact rather than a data defect:
+
+![Procurement funnel](docs/images/scms_procurement_funnel.png)
+
+![On-time trend](docs/images/scms_trend.png)
+
+### Late-delivery model (trained on real shipments)
+
+Accuracy is the wrong metric on an 88.5/11.5 split. The gains curve is what makes
+this model usable: reviewing the top 20% by predicted risk catches 61% of late
+deliveries.
+
+| Gains curve (held-out data) | Feature importance |
+|---|---|
+| ![Gains curve](docs/images/late_delivery_gains.png) | ![Importance](docs/images/late_delivery_importance.png) |
+
+### Simulated manufacturing funnel: where volume goes
 
 | Stage conversion | Loss by stage |
 |---|---|
@@ -91,11 +134,13 @@ which is why they are never pooled:
 
 ![Potency distribution](docs/images/potency_distribution.png)
 
-### Machine learning
+### Clinical model
 
 | Confusion matrix (clinical) | Feature importance (clinical) |
 |---|---|
 | ![Confusion matrix](docs/images/confusion_matrix.png) | ![Feature importance](docs/images/feature_importance.png) |
+
+### Batch risk model (simulated telemetry)
 
 `thermal_load` — the engineered temperature × time interaction — is the strongest
 predictor of batch risk, ahead of raw storage duration:
@@ -125,9 +170,9 @@ Which lever actually moves total cost:
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                          PRESENTATION LAYER                              │
-│  app/Home.py + 11 pages   ·   src/dashboard/components.py                │
-│  Data Quality · Funnel · Inventory · Shipments · Forecasting · Stability  │
-│  A/B Testing · Simulation · ML Models · Insights · Colab                 │
+│  app/Home.py + 12 pages   ·   src/dashboard/components.py                │
+│  Real-World SCMS · Data Quality · Funnel · Inventory · Shipments          │
+│  Forecasting · Stability · A/B Testing · Simulation · ML · Insights      │
 └─────────────────────────────────┬────────────────────────────────────────┘
                                   │
 ┌─────────────────────────────────▼────────────────────────────────────────┐
@@ -138,18 +183,19 @@ Which lever actually moves total cost:
                                   │
 ┌─────────────────────────────────▼────────────────────────────────────────┐
 │                      ANALYTICS & ML LAYER                                │
-│  src/analytics/  funnel · inventory · shipments · forecasting            │
-│                  stability · ab_testing · simulation                     │
+│  src/analytics/  procurement (REAL) · funnel · inventory · shipments     │
+│                  forecasting · stability · ab_testing · simulation       │
 │  src/ml/         preprocess · train · predict                            │
 │  src/quality/    assessment (5-dimension scoring)                        │
 └─────────────────────────────────┬────────────────────────────────────────┘
                                   │
 ┌─────────────────────────────────▼────────────────────────────────────────┐
 │                            DATA LAYER                                    │
-│  SILVER  src/data/cleaning.py   → dedup, canonicalise, range-check, impute│
-│  BRONZE  data/raw/*.csv         → raw extract, defects intact             │
-│  SOURCE  src/data/generator.py  → seeded digital twin                    │
+│  REAL    src/data/scms.py       → USAID SCMS, 10,324 real shipments       │
 │          data/raw/drug200.csv   → real Kaggle clinical data              │
+│  SILVER  src/data/cleaning.py   → dedup, canonicalise, range-check, impute│
+│  BRONZE  data/raw/*.csv         → simulated extract, defects intact       │
+│  SOURCE  src/data/generator.py  → seeded digital twin                    │
 │  SQL     src/data/database.py   → SQLite star schema + named queries      │
 └─────────────────────────────────┬────────────────────────────────────────┘
                                   │
@@ -176,38 +222,71 @@ Packaging ─→ Warehouse ─→ Distributor ─→ Hospital/Pharmacy ─→ Pa
 
 ## Datasets
 
+The platform runs on **two real datasets and one simulation**, and labels which is
+which on every page.
+
+### Real data
+
 | Dataset | Source | Rows | Role |
 |---|---|---|---|
-| `drug200.csv` | **Real Kaggle clinical dataset** | 200 | Patient-level drug classification |
-| `supply_chain_batches.csv` | Seeded digital twin | ~2,400 | Eight-stage funnel fact table |
+| **SCMS Delivery History** | [USAID Supply Chain Management System](https://www.kaggle.com/datasets/sawandikirby/supply-chain-shipment-pricing-data) — US Government open data | **10,324** | Procurement funnel, vendor scorecards, logistics performance, freight economics, late-delivery model |
+| **drug200** | Kaggle clinical dataset | 200 | Patient-level drug classification |
+
+The SCMS dataset is genuine operational data: every antiretroviral, HIV rapid-test,
+malaria and anti-malarial shipment made under the USAID programme between 2006 and
+2015 — **43 destination countries, 73 vendors, 88 manufacturing sites, $1.63B of
+commodity value**. It carries four procurement milestone dates per line item, real
+freight costs, real transport modes and real delivery outcomes.
+
+### Simulated data
+
+| Dataset | Source | Rows | Role |
+|---|---|---|---|
+| `supply_chain_batches.csv` | Seeded digital twin | ~2,400 | Eight-stage manufacturing funnel |
 | `supply_chain_shipments.csv` | Seeded digital twin | ~7,200 | Three transport legs per batch |
 | `supply_chain_inventory.csv` | Seeded digital twin | 1,080 | Monthly warehouse × product snapshots |
 | `supply_chain_demand.csv` | Seeded digital twin | 900 | Monthly demand by product × region |
 | `dim_drugs` / `dim_suppliers` / `dim_warehouses` | Seeded digital twin | 5 / 8 / 6 | Dimension tables |
 
-### On the supply chain data — stated plainly
+### Why both — stated plainly
 
-`drug200.csv` is genuine Kaggle data. The supply chain tables are **generated**, and
-the README says so rather than implying otherwise.
+SCMS covers procurement and logistics superbly, but it records **nothing about
+manufacturing**: no batch quality outcomes, no storage temperature or humidity
+telemetry, no inventory snapshots. No public dataset does — that data does not leave
+a pharmaceutical company.
 
-That was a deliberate engineering decision. No public dataset carries batch-level
-*funnel telemetry* — per-stage timestamps, per-stage unit yields, storage conditions
-and shipment legs on a common key. The alternative was stitching together several
-incomplete extracts and pretending the joins were sound. Instead the platform ships
-a documented generator with three properties:
+Rather than delete the stability, inventory and quality-funnel analytics, or pretend
+SCMS contains something it does not, the platform keeps a documented generator for
+exactly those domains. It has three properties:
 
-1. **Reproducible** — a fixed seed produces byte-identical output. Every figure in
-   this README can be re-derived from a clean checkout.
-2. **Calibrated** — stage yields, QC release times, cold-chain excursion rates and
-   OTIF levels come from published industry benchmarks, all declared in
-   `config/config.yaml` rather than buried in code.
+1. **Reproducible** — a fixed seed produces byte-identical output.
+2. **Calibrated** — stage yields, QC release times and cold-chain excursion rates
+   come from published industry benchmarks, declared in `config/config.yaml`.
 3. **Coupled to the real data** — the product mix is derived from the prescription
-   distribution observed in `drug200.csv`, so both halves of the platform describe
-   the same portfolio.
+   distribution observed in `drug200.csv`.
 
-A useful side effect: because the ground truth is known, the analytics layer can be
+A useful side effect: because the ground truth is known, the analytics can be
 *verified*. Four structural signals are planted in the generator, and the test suite
-asserts that the analysis recovers each one.
+asserts the analysis recovers each one.
+
+**Every simulated figure is labelled as simulated, in the dashboard and here.**
+
+### What the real data taught that the simulation could not
+
+Real messiness is different from injected messiness, and more instructive:
+
+- `Freight Cost (USD)` contains `"Freight Included in Commodity Cost"` (1,442 rows),
+  `"Invoiced Separately"` (239), and cross-references like `"See DN-304 (ID#:10589)"`.
+- `PO Sent to Vendor Date` contains `"N/A - From RDC"` on 5,404 rows — **not missing
+  data**, but a correct record that no vendor order existed because the goods came
+  from regional distribution centre stock.
+- Date formats are mixed *within the same file* (`2-Jun-06` alongside `9/11/14`).
+
+A standard completeness check scores this file **99.3% complete** and grade A. It is
+wrong: 55% of purchase-order dates and 40% of freight costs are unusable strings
+sitting in text columns. That contrast — generic profiling versus type-aware,
+meaning-aware parsing — is shown side by side on the Data Quality page, and it is the
+single most transferable lesson in the project.
 
 ---
 
@@ -222,7 +301,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 python scripts/build_dataset.py --summary    # build data layer + SQLite warehouse
-python scripts/train_models.py               # train and persist both models
+python scripts/train_models.py               # train and persist all three models
 streamlit run app/Home.py                    # launch the dashboard
 ```
 
@@ -230,7 +309,7 @@ Optional:
 
 ```bash
 python scripts/run_quality_report.py    # export the data quality Excel workbook
-pytest tests/ -q                        # 99 tests, ~8 seconds
+pytest tests/ -q                        # 131 tests, ~9 seconds
 ```
 
 ---
@@ -250,6 +329,7 @@ pytest tests/ -q                        # 99 tests, ~8 seconds
 | **A/B Testing** | Four interventions: z-test, chi-square, t-test, power analysis, segments, costed verdict |
 | **Simulation** | Seven live levers propagating through quality, service and cost KPIs |
 | **Insights** | Consolidated recommendations with value, confidence and evidence trail |
+| **Real-World SCMS** | Measured procurement, vendor and logistics performance on real USAID data |
 | **Google Colab** | The full reproducible notebook |
 
 ---
@@ -303,9 +383,10 @@ cut-offs, service-level z-scores, A/B effect sizes, economic assumptions — liv
 ```
 ├── app/
 │   ├── Home.py                      # executive landing page
-│   └── pages/                       # 11 analytical pages
+│   └── pages/                       # 12 analytical pages
 ├── config/config.yaml               # every threshold, in one place
 ├── data/
+│   ├── external/                    # real USAID SCMS dataset
 │   ├── raw/                         # bronze layer + drug200.csv
 │   └── processed/                   # SQLite warehouse
 ├── models/                          # joblib pipelines + evaluation metadata
@@ -318,15 +399,15 @@ cut-offs, service-level z-scores, A/B effect sizes, economic assumptions — liv
 │   └── run_quality_report.py
 ├── src/
 │   ├── analytics/                   # funnel, inventory, shipments, forecasting,
-│   │                                # stability, ab_testing, simulation
+│   │                                # stability, ab_testing, simulation, procurement
 │   ├── dashboard/components.py      # shared Streamlit UI toolkit
-│   ├── data/                        # generator, loader, cleaning, database
+│   ├── data/                        # generator, loader, cleaning, database, scms
 │   ├── ml/                          # preprocess, train, predict
 │   ├── quality/assessment.py        # 5-dimension data quality scoring
 │   ├── viz/                         # theme + 28 chart builders
 │   ├── config.py
 │   └── logger.py
-├── tests/                           # 99 tests
+├── tests/                           # 131 tests
 └── docs/
     ├── ARCHITECTURE.md
     └── INTERVIEW_GUIDE.md
@@ -335,6 +416,29 @@ cut-offs, service-level z-scores, A/B effect sizes, economic assumptions — liv
 ---
 
 ## Models
+
+### Model 3 — Late delivery (REAL data) ⭐
+
+| | |
+|---|---|
+| **Data** | USAID SCMS — 10,324 real shipments |
+| **Target** | `is_late` (delivered after scheduled date) |
+| **Features** | Mode, region, commodity, fulfilment route, INCO term, quantity, weight, freight, planned lead time |
+| **Selected** | XGBoost (CV macro F1 = 0.660) |
+| **Test performance** | ROC AUC **0.845** · macro F1 0.634 · accuracy 0.879 |
+| **Operational value** | Top 20% by risk captures **61% of late deliveries** (3.0× lift) |
+| **Top driver** | Fulfilment route and INCO term — ahead of transport mode |
+
+*Honest framing: accuracy (0.879) sits marginally **below** the majority-class
+baseline (0.885), because only 11.5% of shipments are late. That is not a failure —
+it means accuracy is the wrong metric. The model ranks risk well (AUC 0.84) and
+should be deployed as a prioritisation queue, not a binary gate.*
+
+**Leakage control:** `date_delivered`, `delivery_delay_days`, `vendor_lead_time_days`,
+`total_lead_time_days` and `recording_lag_days` are all excluded — each is derived
+from the delivery date and would hand the model its own answer. Vendor identity is
+also excluded: with 73 vendors, one-hot encoding invites memorisation and cannot
+generalise to an unseen supplier. A test asserts both exclusions.
 
 ### Model 1 — Drug classification (clinical)
 
