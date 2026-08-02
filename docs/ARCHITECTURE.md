@@ -11,7 +11,7 @@ any layer can be tested in isolation and the analytics can be used from a notebo
 a CLI script or the dashboard without change.
 
 ```
-Presentation   app/                     Streamlit pages (13)
+Presentation   app/                     Streamlit pages (Home + 8)
 Visualisation  src/viz/                 theme + chart builders
 Analytics/ML   src/analytics/, src/ml/, src/quality/
 Data           src/data/                scms (REAL), generator, cleaning, loader, database
@@ -117,12 +117,14 @@ it injected, giving a ground-truth test of the profiler.
 |---|---|
 | `procurement.py` | **Real data.** Procurement milestone coverage, lead-time breakdown, vendor/country/region/mode scorecards, freight economics, delivery trend |
 | `funnel.py` | Stage conversion, drop-off, dwell time, bottleneck ranking with severity scoring, loss attribution, QA root causes, quarterly trend |
-| `inventory.py` | Turnover, ABC classification, stock-out / overstock / expiry registers, warehouse utilisation |
-| `shipments.py` | Supplier scorecard, regional and carrier performance, transit-time distribution, late-shipment analysis |
-| `forecasting.py` | Aggregation, decomposition, three forecast methods, backtest ranking |
 | `stability.py` | Binned condition effects, OLS degradation model, shelf-life estimation, excursion significance test |
 | `ab_testing.py` | Experiment simulation, two-proportion z-test, chi-square, Welch t-test, power analysis, segments, costed recommendation |
-| `simulation.py` | Seven-lever elasticity model, tornado analysis, sensitivity sweeps, preset scenarios |
+
+**On scope.** Earlier revisions also carried inventory, shipment, forecasting and
+scenario-simulation modules. They worked, but they diluted the story: four extra
+dashboard pages that no resume claim or headline finding depended on. They were
+removed rather than left in as dead weight - a smaller platform that a reviewer can
+hold in their head beats a larger one they skim.
 
 **Uniform contract.** Every public function takes an optional pre-loaded DataFrame as
 its first argument, defaulting to `None` â†’ load from `loader`. That single convention
@@ -259,7 +261,7 @@ presented as a queueing simulation.
 
 ## Testing strategy
 
-131 tests, ~9 seconds. Structured around invariants rather than implementation
+104 tests, ~9 seconds. Structured around invariants rather than implementation
 details, because the failure mode that matters is a plausible-but-wrong dashboard.
 
 | Suite | What it protects |
@@ -293,6 +295,7 @@ The dashboard is separately smoke-tested through Streamlit's `AppTest` harness â
 | A model algorithm | `config.ml.*.models` + `param_grid` + a branch in `train.get_model` |
 | A simulation lever | `config.simulation.levers` + an elasticity in `config.simulation.elasticity` |
 | A dashboard page | A file in `app/pages/`, composed from `src.dashboard.components` |
+| A chart type | A builder in `src/viz/charts.py` returning a themed `go.Figure` |
 | A real-data source | A parser in `src/data/`, an accessor in `loader.py`, an entry in `config.datasets` |
 
 Most extensions are configuration edits, which is the point of pushing every constant

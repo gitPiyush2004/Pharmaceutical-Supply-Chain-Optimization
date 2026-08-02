@@ -201,34 +201,73 @@ def verdict_badge(verdict: str) -> str:
 # ---------------------------------------------------------------------------
 # Data display
 # ---------------------------------------------------------------------------
-def show_table(data: pd.DataFrame, height: int | None = None,
-               hide_index: bool = True, use_container_width: bool = True,
-               column_config: dict | None = None) -> None:
-    """Render a DataFrame with consistent styling.
+#: Friendly headers for the column names that recur across tables. Raw snake_case
+#: is fine in a notebook but looks unfinished in a dashboard.
+_COLUMN_LABELS: dict[str, str] = {
+    "on_time_pct": "On-Time %", "avg_delay_days": "Avg Delay (d)",
+    "median_delay_days": "Median Delay (d)", "p90_delay_days": "P90 Delay (d)",
+    "line_value_usd": "Value (USD)", "freight_cost_usd": "Freight (USD)",
+    "value_lost_usd": "Value Lost (USD)", "units_lost": "Units Lost",
+    "dropoff_pct": "Drop-off %", "conversion_from_previous_pct": "Conversion %",
+    "cumulative_conversion_pct": "Cumulative %", "shipment_mode": "Mode",
+    "shipments": "Shipments", "vendor": "Vendor", "region": "Region",
+    "coverage_pct": "Coverage %", "share_pct": "Share %",
+    "missing_count": "Missing", "missing_pct": "Missing %",
+    "outlier_count": "Outliers", "outlier_pct": "Outlier %",
+    "violation_pct": "Violation %", "rows_affected": "Rows",
+    "value_usd": "Value (USD)", "parsed_pct": "Parsed %",
+}
 
-    ``height`` is omitted from the call rather than passed as ``None``, because
-    recent Streamlit versions reject ``None`` instead of treating it as "auto".
+
+def _pretty_columns(data: pd.DataFrame) -> pd.DataFrame:
+    """Title-case snake_case headers so tables read as finished UI.
+
+    Known columns get a curated label; other *string* columns fall back to a
+    title-cased version of their own name. Non-string headers (a contingency
+    table indexed by integers, for instance) are left exactly as they are - they
+    already mean something, and renaming them would destroy it.
     """
-    kwargs: dict = {"hide_index": hide_index,
-                    "use_container_width": use_container_width,
+    renamed = {
+        column: _COLUMN_LABELS.get(column, column.replace("_", " ").title())
+        for column in data.columns
+        if isinstance(column, str)
+    }
+    return data.rename(columns=renamed) if renamed else data
+
+
+def show_table(data: pd.DataFrame, height: int | None = None,
+               hide_index: bool = True, column_config: dict | None = None,
+               prettify: bool = True) -> None:
+    """Render a DataFrame with consistent styling and readable headers.
+
+    Notes
+    -----
+    ``height`` is omitted from the call rather than passed as ``None``: recent
+    Streamlit versions reject ``None`` instead of treating it as "auto".
+
+    ``width="stretch"`` replaces the deprecated ``use_container_width=True``,
+    which Streamlit removes after 2025-12-31.
+    """
+    frame = _pretty_columns(data) if prettify else data
+    kwargs: dict = {"hide_index": hide_index, "width": "stretch",
                     "column_config": column_config}
     if height is not None:
         kwargs["height"] = height
-    st.dataframe(data, **kwargs)
+    st.dataframe(frame, **kwargs)
 
 
 def download_button(data: pd.DataFrame, filename: str, label: str = "Download CSV",
                     key: str | None = None) -> None:
-    """Offer a DataFrame as a CSV download."""
+    """Offer a DataFrame as a CSV download (raw column names, not prettified)."""
     st.download_button(
         label=label, data=data.to_csv(index=False).encode("utf-8"),
         file_name=filename, mime="text/csv", key=key,
     )
 
 
-def chart(figure, use_container_width: bool = True, key: str | None = None) -> None:
+def chart(figure, key: str | None = None) -> None:
     """Render a Plotly figure with the platform's standard options."""
-    st.plotly_chart(figure, use_container_width=use_container_width, key=key,
+    st.plotly_chart(figure, width="stretch", key=key,
                     config={"displayModeBar": False})
 
 

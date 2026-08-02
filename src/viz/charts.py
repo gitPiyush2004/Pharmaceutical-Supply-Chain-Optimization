@@ -123,30 +123,138 @@ def funnel_comparison_chart(conversion: pd.DataFrame, dimension: str,
 # ---------------------------------------------------------------------------
 # Generic building blocks
 # ---------------------------------------------------------------------------
+#: Longest category label rendered on an axis before it is shortened.
+MAX_LABEL_CHARS = 28
+
+#: Readable axis titles for the column names that recur across charts.
+_AXIS_LABELS: dict[str, str] = {
+    "on_time_pct": "On-time delivery (%)", "avg_delay_days": "Average delay (days)",
+    "dropoff_pct": "Drop-off (%)", "value_lost_usd": "Value lost (USD)",
+    "line_value_usd": "Commodity value (USD)", "freight_cost_usd": "Freight (USD)",
+    "median_freight_per_kg_usd": "Median freight (USD/kg)",
+    "annual_value_usd": "Estimated annual value (USD)",
+    "value_usd": "Estimated annual value (USD)",
+    "coverage_pct": "Milestone coverage (%)", "shipments": "Shipments",
+    "units": "Units", "batches": "Batches", "importance": "Importance",
+    "missing_pct": "Missing (%)", "outlier_pct": "Outliers (%)",
+    "capture_rate_pct": "Late deliveries captured (%)",
+    "targeted_pct": "Shipments reviewed (%)", "precision_pct": "Precision (%)",
+    "qa_pass_rate_pct": "QA pass rate (%)", "fill_rate_pct": "Fill rate (%)",
+    "end_to_end_yield_pct": "End-to-end yield (%)",
+    "out_of_spec_pct": "Out of specification (%)",
+    "avg_potency_pct": "Mean potency (%)", "probability": "Probability",
+    "vendor": "Vendor", "region": "Region", "shipment_mode": "Transport mode",
+    "brand_name": "Product", "stage": "Stage", "bucket": "Bucket",
+    "experiment": "Intervention", "area": "Area", "feature": "Feature",
+}
+
+
+def shorten_labels(data: pd.DataFrame, column: str,
+                   limit: int = MAX_LABEL_CHARS) -> tuple[pd.DataFrame, bool]:
+    """Truncate over-long category labels, preserving the original for hover.
+
+    Real vendor names run to 65 characters ("MERCK SHARP & DOHME IDEA GMBH
+    (FORMALLY ...)"), which squeezes a horizontal bar chart into a sliver. This
+    shortens the displayed label and stashes the full text in a
+    ``<column>_full`` column so the tooltip can still show it.
+
+    Parameters
+    ----------
+    data
+        Frame to copy and modify.
+    column
+        Categorical column to shorten.
+    limit
+        Maximum displayed characters before an ellipsis is appended.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, bool]
+        The frame (a copy) and whether anything was actually shortened.
+    """
+    if column not in data.columns or not len(data):
+        return data, False
+    labels = data[column].astype(str)
+    if labels.str.len().max() <= limit:
+        return data, False
+
+    out = data.copy()
+    out[f"{column}_full"] = labels
+    out[column] = labels.where(
+        labels.str.len() <= limit, labels.str.slice(0, limit - 1) + "…")
+    return out, True
+
+
+def axis_label(column: str) -> str:
+    """Turn a snake_case column name into a readable axis title."""
+    return _AXIS_LABELS.get(column, column.replace("_", " ").title())
+
+
 def bar_chart(data: pd.DataFrame, x: str, y: str, title: str = "",
               color: str | None = None, orientation: str = "v",
               text_format: str = ",.0f", height: int = 400,
               colour_override: str | None = None) -> go.Figure:
-    """General-purpose bar chart with sensible pharma-dashboard defaults."""
+    """General-purpose bar chart with sensible pharma-dashboard defaults.
+
+    Calling convention: ``x`` is always the **category** and ``y`` always the
+    **value**, whichever way the bars point. For ``orientation="h"`` the axes are
+    swapped internally - Plotly requires the value on x for horizontal bars, and
+    passing them the other way round silently renders an unreadable chart.
+
+    Long category labels are shortened for display and shown in full on hover,
+    so a chart of real vendor names stays legible.
+    """
+    data, shortened = shorten_labels(data, x)
+    hover = {f"{x}_full": True, x: False} if shortened else None
+
+    horizontal = orientation == "h"
+    plot_x, plot_y = (y, x) if horizontal else (x, y)
+
     if color and color in data.columns:
-        fig = px.bar(data, x=x, y=y, color=color, orientation=orientation,
-                     color_discrete_sequence=SEQUENCE, text_auto=text_format)
+        fig = px.bar(data, x=plot_x, y=plot_y, color=color, orientation=orientation,
+                     color_discrete_sequence=SEQUENCE, text_auto=text_format,
+                     hover_data=hover)
     else:
-        fig = px.bar(data, x=x, y=y, orientation=orientation, text_auto=text_format)
+        fig = px.bar(data, x=plot_x, y=plot_y, orientation=orientation,
+                     text_auto=text_format, hover_data=hover)
         fig.update_traces(marker_color=colour_override or PALETTE["primary"])
+
     fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_xaxes(title=axis_label(plot_x))
+    fig.update_yaxes(title=axis_label(plot_y))
+
+    if horizontal:
+        # Leave room for the category labels instead of letting Plotly crop them.
+        fig.update_layout(margin=dict(l=min(230, 9 * MAX_LABEL_CHARS)))
+    elif shortened:
+        fig.update_xaxes(tickangle=-35)
+        fig.update_layout(margin=dict(b=140))
     return apply_theme(fig, title=title, height=height)
 
 
 def line_chart(data: pd.DataFrame, x: str, y: str | list[str], title: str = "",
                color: str | None = None, height: int = 400,
                y_title: str | None = None) -> go.Figure:
-    """Time-series line chart."""
+    """Time-series line chart with readable axis titles and series names."""
     fig = px.line(data, x=x, y=y, color=color, markers=len(data) <= 40,
                   color_discrete_sequence=SEQUENCE)
     fig.update_traces(line=dict(width=2.5))
+
+    fig.update_xaxes(title=axis_label(x))
     if y_title:
         fig.update_yaxes(title=y_title)
+    elif isinstance(y, str):
+        fig.update_yaxes(title=axis_label(y))
+
+    # Plotly names the legend "variable" and each series after its raw column
+    # when several y columns are plotted; both read as unfinished output.
+    if isinstance(y, list):
+        for trace in fig.data:
+            trace.name = axis_label(trace.name)
+        fig.update_layout(legend_title_text="")
+    elif color:
+        fig.update_layout(legend_title_text=axis_label(color))
+
     return apply_theme(fig, title=title, height=height)
 
 
@@ -163,22 +271,6 @@ def heatmap(data: pd.DataFrame, title: str = "", height: int = 420,
     return apply_theme(fig, title=title, height=height)
 
 
-def scatter_chart(data: pd.DataFrame, x: str, y: str, title: str = "",
-                  color: str | None = None, size: str | None = None,
-                  trendline: bool = False, height: int = 420) -> go.Figure:
-    """Scatter plot with an optional OLS trendline."""
-    fig = px.scatter(
-        data, x=x, y=y, color=color, size=size,
-        color_discrete_sequence=SEQUENCE,
-        color_discrete_map=RISK_COLOURS if color and "risk" in str(color).lower() else None,
-        trendline="ols" if trendline else None,
-        trendline_color_override=PALETTE["danger"],
-        opacity=0.65,
-    )
-    fig.update_traces(marker=dict(line=dict(width=0)))
-    return apply_theme(fig, title=title, height=height)
-
-
 def donut_chart(labels: list, values: list, title: str = "",
                 height: int = 380, colours: list[str] | None = None) -> go.Figure:
     """Donut chart with the total displayed in the centre."""
@@ -192,14 +284,6 @@ def donut_chart(labels: list, values: list, title: str = "",
     fig.add_annotation(text=f"<b>{sum(values):,.0f}</b><br>Total",
                        x=0.5, y=0.5, showarrow=False, font=dict(size=15))
     return apply_theme(fig, title=title, height=height, showlegend=True)
-
-
-def box_chart(data: pd.DataFrame, x: str, y: str, title: str = "",
-              height: int = 400, color: str | None = None) -> go.Figure:
-    """Box plot for distribution comparison across categories."""
-    fig = px.box(data, x=x, y=y, color=color or x, points="outliers",
-                 color_discrete_sequence=SEQUENCE)
-    return apply_theme(fig, title=title, height=height, showlegend=color is not None)
 
 
 def pareto_chart(data: pd.DataFrame, category: str, value: str,
@@ -228,35 +312,6 @@ def pareto_chart(data: pd.DataFrame, category: str, value: str,
     return apply_theme(fig, title=title, height=height)
 
 
-def gauge_chart(value: float, title: str, target: float, suffix: str = "%",
-                height: int = 260, higher_is_better: bool = True,
-                max_value: float | None = None) -> go.Figure:
-    """Gauge showing one KPI against its target."""
-    maximum = max_value if max_value is not None else max(value, target) * 1.35
-    colour = status_colour(value, target, higher_is_better)
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
-        value=value,
-        number={"suffix": suffix, "font": {"size": 30}},
-        delta={"reference": target, "suffix": suffix,
-               "increasing": {"color": PALETTE["success"] if higher_is_better else PALETTE["danger"]},
-               "decreasing": {"color": PALETTE["danger"] if higher_is_better else PALETTE["success"]}},
-        gauge={
-            "axis": {"range": [0, maximum], "tickwidth": 1},
-            "bar": {"color": colour, "thickness": 0.7},
-            "bgcolor": "#F1F5F9",
-            "borderwidth": 0,
-            "threshold": {"line": {"color": PALETTE["danger"], "width": 3},
-                          "thickness": 0.85, "value": target},
-        },
-        title={"text": title, "font": {"size": 13}},
-    ))
-    return apply_theme(fig, height=height, margin=dict(l=20, r=20, t=50, b=10))
-
-
-# ---------------------------------------------------------------------------
-# Machine learning
-# ---------------------------------------------------------------------------
 def confusion_matrix_chart(matrix: pd.DataFrame, title: str = "Confusion Matrix",
                            height: int = 440) -> go.Figure:
     """Annotated confusion matrix (rows = actual, columns = predicted)."""
@@ -343,73 +398,6 @@ def model_comparison_chart(comparison: pd.DataFrame, metric: str = "test_f1_macr
 # ---------------------------------------------------------------------------
 # Forecasting
 # ---------------------------------------------------------------------------
-def forecast_chart(history: pd.DataFrame, forecast: pd.DataFrame,
-                   date_col: str = "date", value_col: str = "units_demanded",
-                   title: str = "Demand Forecast", height: int = 440) -> go.Figure:
-    """Historical demand plus forecast with a shaded confidence band."""
-    fig = go.Figure()
-
-    # Confidence band first so the lines draw on top of it.
-    # `.to_numpy()` keeps the dates as a datetime64 array. Building the band with
-    # `list(series)` instead would yield pandas Timestamps, which Plotly's static
-    # image writer cannot serialise - it renders in the browser but fails on export.
-    band_dates = forecast[date_col].to_numpy()
-    fig.add_trace(go.Scatter(
-        x=np.concatenate([band_dates, band_dates[::-1]]),
-        y=np.concatenate([forecast["upper_ci"].to_numpy(),
-                          forecast["lower_ci"].to_numpy()[::-1]]),
-        fill="toself", fillcolor="rgba(11,110,153,0.13)",
-        line=dict(color="rgba(255,255,255,0)"), hoverinfo="skip",
-        name="Confidence interval",
-    ))
-    fig.add_trace(go.Scatter(
-        x=history[date_col], y=history[value_col], mode="lines",
-        name="Actual", line=dict(color=PALETTE["primary"], width=2.5),
-        hovertemplate="<b>%{x|%b %Y}</b><br>Actual: %{y:,.0f}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=forecast[date_col], y=forecast["forecast"], mode="lines+markers",
-        name="Forecast", line=dict(color=PALETTE["accent"], width=2.5, dash="dash"),
-        marker=dict(size=6),
-        hovertemplate="<b>%{x|%b %Y}</b><br>Forecast: %{y:,.0f}<extra></extra>",
-    ))
-
-    if len(history):
-        # `add_vline` stores x in layout.shapes, and a pandas Timestamp there is
-        # not JSON-serialisable by Plotly's static image writer (it renders fine
-        # in the browser, so this only surfaces on export). Pass an ISO string.
-        boundary = history[date_col].max()
-        if isinstance(boundary, pd.Timestamp):
-            boundary = boundary.isoformat()
-        fig.add_vline(x=boundary, line_dash="dot",
-                      line_color=PALETTE["neutral"],
-                      annotation_text="Forecast start", annotation_position="top left")
-    fig.update_yaxes(title="Units")
-    return apply_theme(fig, title=title, height=height)
-
-
-def decomposition_chart(decomposition: pd.DataFrame,
-                        title: str = "Demand Decomposition", height: int = 560) -> go.Figure:
-    """Stacked observed / trend / seasonal / residual panels."""
-    components = [("observed", PALETTE["primary"]), ("trend", PALETTE["accent"]),
-                  ("seasonal", PALETTE["secondary"]), ("residual", PALETTE["neutral"])]
-    available = [(name, colour) for name, colour in components
-                 if name in decomposition.columns]
-
-    fig = make_subplots(rows=len(available), cols=1, shared_xaxes=True,
-                        vertical_spacing=0.05,
-                        subplot_titles=[name.title() for name, _ in available])
-    for index, (name, colour) in enumerate(available, start=1):
-        fig.add_trace(go.Scatter(
-            x=decomposition["date"], y=decomposition[name], mode="lines",
-            name=name.title(), line=dict(color=colour, width=2),
-        ), row=index, col=1)
-    return apply_theme(fig, title=title, height=height, showlegend=False)
-
-
-# ---------------------------------------------------------------------------
-# A/B testing
-# ---------------------------------------------------------------------------
 def ab_comparison_chart(summary: pd.DataFrame, metric_name: str = "Success Rate",
                         title: str = "Control vs Treatment", height: int = 400) -> go.Figure:
     """Arm success rates with Wilson confidence intervals as error bars."""
@@ -483,61 +471,6 @@ def segment_effect_chart(segments: pd.DataFrame, dimension: str = "region",
 
 # ---------------------------------------------------------------------------
 # Simulation
-# ---------------------------------------------------------------------------
-def tornado_chart(tornado: pd.DataFrame, kpi_label: str = "Total Cost",
-                  title: str | None = None, height: int = 400) -> go.Figure:
-    """Tornado chart ranking levers by their influence on a KPI."""
-    data = tornado.sort_values("swing")
-    fig = go.Figure(go.Bar(
-        x=data["swing"], y=data["label"], orientation="h",
-        marker_color=PALETTE["primary"],
-        text=[f"{v:,.0f}" for v in data["swing"]], textposition="outside",
-        customdata=np.stack([data["low_value"], data["high_value"],
-                             data["swing_pct"]], axis=-1),
-        hovertemplate=("<b>%{y}</b><br>Range: %{customdata[0]} to %{customdata[1]}<br>"
-                       "Swing: %{x:,.0f} (%{customdata[2]:.1f}% of baseline)<extra></extra>"),
-    ))
-    fig.update_xaxes(title=f"Swing in {kpi_label}")
-    return apply_theme(fig, title=title or f"Lever Sensitivity - {kpi_label}",
-                       height=height, showlegend=False)
-
-
-def scenario_impact_chart(kpis: dict, title: str = "Baseline vs Scenario",
-                          height: int = 420) -> go.Figure:
-    """Diverging bars showing the percentage change in each KPI under a scenario."""
-    names, deltas, colours = [], [], []
-    for key, kpi in kpis.items():
-        names.append(key.replace("_pct", "").replace("_usd", "").replace("_", " ").title())
-        deltas.append(kpi["delta_pct"])
-        colours.append(PALETTE["success"] if kpi.get("improved") else PALETTE["danger"])
-
-    fig = go.Figure(go.Bar(
-        x=deltas, y=names, orientation="h", marker_color=colours,
-        text=[f"{v:+.1f}%" for v in deltas], textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Change: %{x:+.2f}%<extra></extra>",
-    ))
-    fig.add_vline(x=0, line_color=PALETTE["neutral"])
-    fig.update_xaxes(title="Change vs baseline (%)")
-    return apply_theme(fig, title=title, height=height, showlegend=False)
-
-
-def sensitivity_chart(sensitivity: pd.DataFrame, lever_label: str, kpi_label: str,
-                      height: int = 380) -> go.Figure:
-    """Response curve of a KPI across one lever's full range."""
-    fig = go.Figure(go.Scatter(
-        x=sensitivity["lever_value"], y=sensitivity["kpi_value"],
-        mode="lines+markers", line=dict(color=PALETTE["primary"], width=2.5),
-        marker=dict(size=7), fill="tozeroy", fillcolor="rgba(11,110,153,0.10)",
-        hovertemplate=f"{lever_label}: %{{x}}<br>{kpi_label}: %{{y:,.2f}}<extra></extra>",
-    ))
-    fig.update_xaxes(title=lever_label)
-    fig.update_yaxes(title=kpi_label)
-    return apply_theme(fig, title=f"{kpi_label} vs {lever_label}",
-                       height=height, showlegend=False)
-
-
-# ---------------------------------------------------------------------------
-# Stability and risk
 # ---------------------------------------------------------------------------
 def risk_distribution_chart(counts: pd.Series, title: str = "Batch Risk Distribution",
                             height: int = 340) -> go.Figure:
@@ -634,13 +567,24 @@ def condition_effect_chart(effect: pd.DataFrame, x_col: str, title: str,
 
 
 __all__ = [
-    "funnel_chart", "funnel_dropoff_chart", "stage_delay_chart", "funnel_comparison_chart",
-    "bar_chart", "line_chart", "heatmap", "scatter_chart", "donut_chart", "box_chart",
-    "pareto_chart", "gauge_chart",
-    "confusion_matrix_chart", "roc_curves_chart", "pr_curves_chart",
-    "feature_importance_chart", "model_comparison_chart",
-    "forecast_chart", "decomposition_chart",
-    "ab_comparison_chart", "significance_chart", "segment_effect_chart",
-    "tornado_chart", "scenario_impact_chart", "sensitivity_chart",
-    "risk_distribution_chart", "potency_distribution_chart", "condition_effect_chart",
+    "funnel_chart",
+    "funnel_dropoff_chart",
+    "stage_delay_chart",
+    "funnel_comparison_chart",
+    "bar_chart",
+    "line_chart",
+    "heatmap",
+    "donut_chart",
+    "pareto_chart",
+    "confusion_matrix_chart",
+    "roc_curves_chart",
+    "pr_curves_chart",
+    "feature_importance_chart",
+    "model_comparison_chart",
+    "ab_comparison_chart",
+    "significance_chart",
+    "segment_effect_chart",
+    "risk_distribution_chart",
+    "potency_distribution_chart",
+    "condition_effect_chart",
 ]

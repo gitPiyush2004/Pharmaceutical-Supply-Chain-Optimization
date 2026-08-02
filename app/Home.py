@@ -1,9 +1,8 @@
 """
 PharmaChain Analytics - executive landing page.
 
-Answers three questions before a reader clicks anything: how healthy is the
-supply chain, where is value leaking, and what should be done about it. The
-detail pages then let a reader verify every claim made here.
+Answers three questions before a reader clicks anything: what the project does,
+what it found, and where to look next.
 """
 
 from __future__ import annotations
@@ -18,110 +17,104 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st
 
-from src.dashboard.components import (callout, chart, insight, kpi_row, methodology,
-                        page_setup, section, show_table, sidebar_about)
-from src.analytics import funnel, inventory, shipments, stability
+from src.dashboard.components import (callout, chart, insight, kpi_row,
+                                      methodology, page_setup, section,
+                                      show_table, sidebar_about)
+from src.analytics import funnel, procurement
+from src.ml import predict
 from src.viz import charts
 from src.viz.theme import fmt_currency, fmt_days, fmt_pct, fmt_units
 
 page_setup(
     title="Pharmaceutical Supply Chain Optimization",
     icon="💊",
-    subtitle="Funnel analytics, statistical experimentation and machine learning "
-             "across an eight-stage pharmaceutical supply chain",
+    subtitle="Drug classification, funnel analytics and statistical A/B testing "
+             "across a pharmaceutical supply chain",
 )
 
 
-# ---------------------------------------------------------------------------
-# Cached metric loads - one cache entry serves every page in the session.
-# ---------------------------------------------------------------------------
-@st.cache_data(show_spinner="Computing supply chain metrics...")
-def _headline_metrics() -> dict:
-    """Collect the KPI set shown on this page from every analytics module."""
-    return {
-        "funnel": funnel.funnel_kpis(),
-        "shipments": shipments.shipment_kpis(),
-        "inventory": inventory.inventory_kpis(),
-        "stability": stability.stability_kpis(),
-    }
+@st.cache_data(show_spinner="Computing metrics...")
+def _metrics() -> dict:
+    """Headline numbers from each half of the platform."""
+    return {"funnel": funnel.funnel_kpis(), "scms": procurement.scms_kpis()}
 
 
 @st.cache_data(show_spinner=False)
-def _funnel_views() -> tuple:
-    """Funnel summary, bottleneck ranking and loss attribution."""
-    return (funnel.funnel_summary(), funnel.identify_bottlenecks(),
-            funnel.loss_attribution(top_n=8))
+def _model_scores() -> dict:
+    """Test metrics from the persisted model artefacts."""
+    scores = {}
+    for name in ("drug_classification", "late_delivery"):
+        try:
+            scores[name] = predict.model_summary(name)
+        except FileNotFoundError:
+            scores[name] = None
+    return scores
 
 
-metrics = _headline_metrics()
-fk, sk, ik, stk = (metrics["funnel"], metrics["shipments"],
-                   metrics["inventory"], metrics["stability"])
-summary, bottlenecks, losses = _funnel_views()
+metrics = _metrics()
+fk, sk = metrics["funnel"], metrics["scms"]
+models = _model_scores()
 
 # ---------------------------------------------------------------------------
-# Executive KPI band
+# What this project is
 # ---------------------------------------------------------------------------
+section("What This Project Does")
+
+st.markdown("""
+Three connected pieces of analytics work on pharmaceutical data:
+
+1. **A machine learning pipeline** that predicts which drug suits a patient from
+   their clinical readings — the full workflow, from data quality checks through
+   to a deployed prediction interface.
+2. **A supply chain funnel analysis** that traces product through eight stages and
+   finds where volume and value are lost.
+3. **Statistical A/B tests** that establish which operational fixes actually work,
+   rather than which ones sound plausible.
+""")
+
 callout(
-    "This platform runs on **two data sources, and labels which is which "
-    "everywhere**. The *Real-World SCMS* page and the late-delivery model use "
-    "genuine USAID operational data: 10,324 actual shipments to 43 countries, "
-    "2006-2015. The manufacturing funnel, stability and inventory pages use a "
-    "seeded digital twin, because no public dataset carries per-batch storage "
-    "telemetry. The clinical model uses the real Kaggle drug200 dataset.",
-    kind="insight", title="Real data and simulated data",
+    "**Two datasets are real, one is simulated — and every page says which.** The "
+    "clinical model uses the Kaggle `drug200` dataset. The Real-World Operations "
+    "page and the late-delivery model use genuine USAID data: 10,324 actual "
+    "shipments to 43 countries. The manufacturing funnel and stability pages use a "
+    "calibrated simulation, because no public dataset carries per-batch storage "
+    "telemetry.",
+    kind="insight", title="Data provenance",
 )
 
-section(
-    "Executive Summary",
-    "Network-wide performance across the batch lifecycle, from API procurement "
-    "to the unit reaching a patient. Figures on this page come from the simulated "
-    "manufacturing twin; see the Real-World SCMS page for measured operations.",
-)
+# ---------------------------------------------------------------------------
+# Headline results
+# ---------------------------------------------------------------------------
+section("Headline Results")
+
+clinical = models.get("drug_classification")
+late = models.get("late_delivery")
 
 kpi_row([
-    {"label": "End-to-End Yield",
+    {"label": "Drug Classification Accuracy",
+     "value": fmt_pct(clinical["metrics"]["accuracy"] * 100, 1) if clinical else "-",
+     "help_text": "Decision Tree on the Kaggle drug200 dataset"},
+    {"label": "Late-Delivery Model AUC",
+     "value": f"{late['roc_auc_ovr']:.3f}" if late else "-",
+     "help_text": "Trained on 10,324 real USAID shipments"},
+    {"label": "Supply Chain Yield",
      "value": fmt_pct(fk["end_to_end_yield_pct"]),
-     "help_text": f"{fmt_units(fk['units_dispensed'])} of "
-                  f"{fmt_units(fk['units_procured'])} units reach a patient"},
-    {"label": "Value Lost",
-     "value": fmt_currency(fk["total_value_lost_usd"]),
-     "help_text": "Cost of units that never reach a patient"},
-    {"label": "Avg Cycle Time",
-     "value": fmt_days(fk["avg_cycle_time_days"], 0),
-     "help_text": "Procurement to patient, per batch"},
-    {"label": "QA Pass Rate",
-     "value": fmt_pct(fk["qa_pass_rate_pct"]),
-     "help_text": "Batches released at quality control"},
-])
-
-kpi_row([
-    {"label": "On-Time Delivery",
+     "help_text": "Units procured that reach a patient (simulated)"},
+    {"label": "Real On-Time Delivery",
      "value": fmt_pct(sk["on_time_delivery_pct"]),
-     "delta": f"{sk['on_time_delivery_pct'] - sk['otif_target_pct']:+.1f} pp vs "
-              f"{sk['otif_target_pct']:.0f}% target",
-     "delta_good": bool(sk["meets_otif_target"]),
-     "help_text": f"{sk['late_shipments']:,} of {sk['total_shipments']:,} legs late"},
-    {"label": "Inventory Value",
-     "value": fmt_currency(ik["total_inventory_value_usd"]),
-     "help_text": f"{ik['avg_turnover']:.1f} turns vs "
-                  f"{ik['target_turnover']:.0f} target"},
-    {"label": "Expiry Exposure",
-     "value": fmt_currency(ik["expiry_exposure_usd"]),
-     "help_text": "Stock at risk of write-off"},
-    {"label": "Batches Out of Spec",
-     "value": fmt_pct(stk["out_of_spec_pct"]),
-     "help_text": f"Potency below {stk['potency_spec_min']:.0f}% of label claim"},
+     "help_text": f"{sk['shipments']:,} real shipments, {sk['countries']} countries"},
 ])
 
 # ---------------------------------------------------------------------------
-# The funnel - the analytical centrepiece
+# The funnel
 # ---------------------------------------------------------------------------
 section(
-    "The Supply Chain Funnel",
+    "Where Value Is Lost",
     "Every batch is tracked through eight stages. The width of each band is the "
     "volume still in the chain; the gap between bands is where units are lost.",
 )
 
+summary = funnel.funnel_summary()
 left, right = st.columns([3, 2], gap="large")
 with left:
     chart(charts.funnel_chart(summary, title="Units Surviving Each Stage"))
@@ -129,115 +122,79 @@ with right:
     chart(charts.funnel_dropoff_chart(summary))
 
 worst = summary.loc[summary["dropoff_pct"].idxmax()]
-slowest = fk["slowest_stage"]
 insight(
     f"**{worst['stage']}** is the largest single point of unit loss, shedding "
     f"**{worst['dropoff_pct']:.1f}%** of incoming volume "
     f"({fmt_units(worst['units_lost'])} units, {fmt_currency(worst['value_lost_usd'])}). "
-    f"**{slowest}** is the slowest stage at {fk['slowest_stage_days']:.0f} days, "
-    f"making it the constraint on cycle time. Both point at the same fix: quality "
-    f"testing is where this network loses the most volume *and* the most time, "
-    f"which is why it is the first intervention tested on the A/B Testing page."
+    f"It is also the slowest stage at {fk['slowest_stage_days']:.0f} days, so it "
+    "constrains both yield and cycle time — which is why it is the first "
+    "intervention tested on the A/B Testing page."
 )
 
 # ---------------------------------------------------------------------------
-# Bottlenecks and loss drivers
+# Three findings
 # ---------------------------------------------------------------------------
-section(
-    "Where To Intervene",
-    "Stages are ranked by a severity score combining unit loss, dwell time and "
-    "the value destroyed, so remediation effort follows the money.",
-)
-
-flagged = bottlenecks[bottlenecks["is_bottleneck"]]
-if len(flagged):
-    callout(
-        f"{len(flagged)} of {len(bottlenecks)} stages breach the configured "
-        f"thresholds: **{', '.join(flagged['stage'].tolist())}**.",
-        kind="warning", title="Bottlenecks detected",
-    )
-
-show_table(
-    bottlenecks[["stage", "dropoff_pct", "avg_delay_days", "value_lost_usd",
-                 "bottleneck_type", "severity_score", "recommended_action"]],
-    height=300,
-)
-
-section("Loss Concentration by Product and Region")
-chart(charts.pareto_chart(
-    losses, category="brand_name", value="value_lost_usd",
-    cumulative="cumulative_share_pct",
-    title="Value Lost - Pareto by Product (top 8 product-region pairs)",
-))
-insight(
-    f"The top three product-region combinations account for "
-    f"**{losses.head(3)['share_of_total_loss_pct'].sum():.0f}%** of all value lost. "
-    "Loss is concentrated, not spread evenly, so a targeted programme on a handful "
-    "of lanes recovers most of the available value."
-)
-
-# ---------------------------------------------------------------------------
-# What this platform contains
-# ---------------------------------------------------------------------------
-section("How To Navigate This Platform")
+section("Three Findings Worth Knowing")
 
 col1, col2, col3 = st.columns(3, gap="large")
 with col1:
-    st.markdown("""
-**Foundation**
-- **Data Quality** - profiles the raw extract, then shows what the cleaning
-  layer fixed
-- **Funnel Analytics** - the eight-stage conversion and delay analysis
+    st.markdown(f"""
+**Quality testing is the bottleneck**
 
-**Operations**
-- **Inventory** - turnover, ABC, stock-out, overstock and expiry risk
-- **Shipments** - supplier, carrier and regional service performance
+It loses the most volume *and* takes the longest
+({fk['slowest_stage_days']:.0f} days). Its failure modes trace back to incoming
+raw material, not to the manufacturing process.
+
+*See: Funnel Analytics*
 """)
 with col2:
     st.markdown("""
-**Forward-looking**
-- **Demand Forecasting** - Holt-Winters, trend and moving-average models,
-  chosen by backtest rather than assumption
-- **Drug Stability** - temperature, humidity and duration effects on potency
-- **Simulation** - move seven operational levers and watch KPIs respond
+**The weakest supplier is internal**
 
-**Decision science**
-- **A/B Testing** - four operational interventions tested for significance
+On real USAID data, the worst performer is the programme's own regional
+distribution centre channel at 82.9% on-time — not an external manufacturer.
+
+*See: Real-World Operations*
 """)
 with col3:
     st.markdown("""
-**Machine learning**
-- **Drug Classification** - prescribing model on the real Kaggle drug200 dataset
-- **Batch Risk** - stability risk classifier on simulated telemetry
-- **Late Delivery** - trained on 10,324 real USAID shipments
+**Accuracy can be the wrong metric**
 
-**Real-world data**
-- **Real-World SCMS** - measured procurement, vendor and logistics performance
+The late-delivery model scores below the majority-class baseline, yet reviewing
+its top 20% by risk catches 61% of late shipments.
 
-**Reference**
-- **Insights** - the consolidated recommendation set with quantified impact
-- **Google Colab** - the full reproducible ML notebook
+*See: ML Models*
 """)
 
+# ---------------------------------------------------------------------------
+section("How To Navigate")
+
+nav = [
+    ("1. Data Quality", "Profiling, cleaning and the audit trail behind every number"),
+    ("2. ML Models", "Drug classification, batch risk and late delivery, with full evaluation"),
+    ("3. Funnel Analytics", "Eight-stage conversion, drop-off and bottleneck ranking"),
+    ("4. Drug Stability", "How storage conditions destroy potency"),
+    ("5. Real-World Operations", "Measured performance on 10,324 real USAID shipments"),
+    ("6. A/B Testing", "Four interventions tested for statistical and practical significance"),
+    ("7. Insights", "Consolidated recommendations, costed and prioritised"),
+    ("8. Google Colab", "The complete reproducible notebook"),
+]
+import pandas as pd  # noqa: E402  (local: only needed for this small table)
+
+show_table(pd.DataFrame(nav, columns=["Page", "What it covers"]), height=320)
+
 methodology("""
-**Data layers.** The platform separates a *bronze* layer (`data/raw`, what source
-systems hand over, complete with sensor dropouts and free-text region spellings)
-from a *silver* layer (deduplicated, canonicalised and imputed) that every
-analytics module reads. The Data Quality page shows both.
+**Reproducibility.** Everything is deterministic under `project.random_seed` in
+`config/config.yaml`. From a clean checkout, `python scripts/build_dataset.py`
+followed by `python scripts/train_models.py` regenerates every number here.
 
-**Three datasets - two real, one simulated.** The **USAID SCMS delivery history**
-(10,324 actual shipments to 43 countries, 2006-2015) is genuine open operational
-data, and drives every procurement, vendor and logistics metric plus the
-late-delivery model. `drug200.csv` is the real Kaggle clinical dataset behind the
-prescribing model. The **manufacturing tables are a seeded digital twin**, because
-SCMS records procurement and logistics but not manufacturing, and no public dataset
-carries per-batch storage telemetry. Its product mix is derived from the
-prescription distribution in `drug200.csv`, and its stage yields and QC release
-times are calibrated to published benchmarks declared in `config/config.yaml`.
+**One definition per metric.** The dashboard, the notebook and the CLI scripts all
+import the same `src` modules, so nothing can drift out of sync.
 
-**Reproducibility.** Everything is deterministic. `python scripts/build_dataset.py`
-followed by `python scripts/train_models.py` regenerates every number on this
-page from a clean checkout.
+**Honest labelling.** Simulated figures are labelled as simulated wherever they
+appear. The manufacturing simulation exists because SCMS records procurement and
+logistics but not manufacturing, and no public dataset carries per-batch storage
+telemetry.
 """)
 
 sidebar_about()

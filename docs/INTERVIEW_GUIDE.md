@@ -13,34 +13,37 @@ competent one.
 
 Use this when someone says *"tell me about a project."*
 
-> I built a pharmaceutical supply chain analytics platform on **real USAID data —
-> 10,324 actual shipments of HIV and malaria medicines to 43 countries between 2006
-> and 2015**.
+> I built a pharmaceutical analytics platform with three parts.
 >
-> The most interesting finding is counter-intuitive. I built a vendor scorecard
-> expecting a manufacturer to be the weak link, and the worst performer turned out to
-> be an **internal channel** — their own regional distribution centres, at 82.9%
-> on-time across about a billion dollars of product. That's a much better finding than
-> a bad supplier, because you can fix it without renegotiating a single contract.
+> **First, a machine learning pipeline** that predicts which of five drugs suits a
+> patient from their clinical readings — blood pressure, cholesterol, age and
+> sodium-to-potassium ratio. Full workflow: a data quality report that catches
+> missing values, duplicates and invalid entries; median and mode imputation;
+> encoding and standardisation; then a Decision Tree with balanced class weights,
+> because the classes are imbalanced almost six to one. It gets 98% accuracy with
+> per-class AUC above 0.96.
 >
-> I also trained a model to predict late delivery. It gets **ROC AUC 0.84**, but its
-> raw accuracy is actually *below* the majority-class baseline — because only 11.5% of
-> shipments are late. That's not a broken model, it's the wrong metric. So I built a
-> gains curve instead: **review the top 20% by predicted risk and you catch 61% of all
-> late deliveries**, three times better than random. That turns it into an expeditor's
-> priority queue rather than a yes/no gate.
+> **Second, a supply chain funnel analysis** tracing product through eight stages.
+> Only about 63% of what's procured reaches a patient, and quality testing is the
+> bottleneck — it loses the most volume *and* takes the longest.
 >
-> On top of that I simulated the manufacturing side — storage conditions, batch quality,
-> inventory — because no public dataset has per-batch telemetry, and I ran **A/B tests
-> with chi-square and two-proportion z-tests** on four operational interventions to
-> work out which ones produce a real improvement rather than noise.
+> **Third, A/B testing** on four operational fixes, using chi-square and
+> two-proportion z-tests to establish which produce a real improvement rather than
+> noise.
 >
-> It's a Streamlit dashboard, thirteen pages, backed by 131 tests.
+> Part of it runs on **real USAID data — 10,324 actual shipments to 43 countries**.
+> The most interesting finding came from there: I built a vendor scorecard expecting
+> a bad manufacturer, and the worst performer turned out to be their own internal
+> distribution channel at 82.9% on-time.
+>
+> It's a Streamlit dashboard, nine pages, backed by 104 tests.
 
 **Then stop.** Let them pick where to go. Whatever they ask about, you have depth.
 
-> **Say "real data" in the first sentence.** It is the single biggest differentiator
-> against other portfolio projects, and it changes how everything after it is heard.
+> **Two things to get in early:** say **"real data"**, and say **"balanced class
+> weights"**. The first differentiates you from every other portfolio project; the
+> second signals you understand imbalanced classification rather than just calling
+> `.fit()`.
 
 ---
 
@@ -130,7 +133,7 @@ Don't memorise everything. Memorise these — the real-data block especially.
 | **0.98 / 0.988** | Clinical model test accuracy / macro F1 |
 | **0.745 / 0.702** | Batch risk test accuracy / macro F1 |
 | **4** | Interventions A/B tested |
-| **131** | Tests passing |
+| **104** | Tests passing |
 
 If you forget a number, say *"I'd need to check the exact figure, but the order of
 magnitude was…"* That is a completely acceptable answer and far better than guessing.
@@ -138,6 +141,75 @@ magnitude was…"* That is a completely acceptable answer and far better than gu
 ---
 
 ## 4. The questions you will get
+
+### "Walk me through the drug classification pipeline."
+
+The most likely opening question. Have the sequence ready, and give a reason for
+each step rather than just naming it.
+
+> Seven steps.
+>
+> **Data quality first.** I profile for missing values, duplicates, invalid
+> categories and impossible values. The published file is clean, so to actually
+> *test* the cleaning code I inject a controlled set of realistic defects — blank
+> fields, double-submitted records, `high` versus `HIGH`, a negative age — and check
+> the pipeline catches every one. Since I know the ground truth, that doubles as a
+> unit test.
+>
+> **Cleaning, in a specific order.** Standardise text *before* imputing, because
+> otherwise the mode is computed over `high` and `HIGH` counted separately. Then
+> range checks, deduplication, and finally median imputation for numerics and mode
+> for categoricals. Median rather than mean because it's robust to the outliers I
+> just nulled.
+>
+> **Feature engineering.** Ordinal scores for blood pressure and cholesterol —
+> one-hot would throw away the ordering, which is real. A combined severity score.
+> And a binary flag at the Na/K threshold I found in the exploratory analysis, which
+> hands the model the known boundary instead of making it rediscover it.
+>
+> **Encoding and scaling inside one sklearn Pipeline**, so the scaler only ever sees
+> training folds and the serialised model carries its own preprocessing.
+>
+> **Stratified split**, because the smallest class is 8% of the data and an
+> unstratified split could leave barely any of it in the test set.
+>
+> **Decision Tree with balanced class weights.** A tree because the true boundary is
+> axis-aligned — thresholds on Na/K, then splits on blood pressure — so it fits the
+> problem exactly, and because you can read the rules and check them against clinical
+> logic. Balanced weights so an error on the 8% class costs as much as one on the 45%
+> class.
+>
+> **Evaluation on macro-averaged metrics**, not accuracy, plus a confusion matrix,
+> per-class ROC/AUC, and error analysis on every individual mistake.
+
+**If they ask "why not just use a Random Forest?"**
+
+> I compared them. Random forest actually edges it out slightly on the test split,
+> but they tie on cross-validated F1 — and CV is the criterion I committed to in
+> advance. On a 200-row dataset a single test split is noisy, so switching to
+> whichever model wins on it is exactly how leakage creeps in. The tree also gives me
+> readable rules, which in a clinical context is worth more than a fractional gain.
+
+### "What did the error analysis actually tell you?"
+
+This is where you separate yourself. The answer is a *negative* result.
+
+> One patient out of fifty was misclassified — Na/K of 14.6, just under the 15
+> threshold, predicted DrugY when the actual was drugX. That's the expected place for
+> a tree to fail: a hard threshold can't express "close to the boundary."
+>
+> But the important part is that it was wrong at **100% confidence**. A Decision Tree
+> grown to pure leaves reports every single prediction as certain, so the
+> probabilities are degenerate — they carry no information at all.
+>
+> That matters practically. The obvious safety net in a clinical setting is a
+> confidence threshold: auto-accept above it, escalate to a pharmacist below it. I
+> built the routing table to test that, and it's completely flat — every row sits at
+> confidence 1.0, so no threshold separates anything. The fix is probability
+> calibration, Platt scaling or isotonic regression, or constraining leaf size.
+>
+> I found that by doing the error analysis. Reporting 98% accuracy and stopping would
+> have hidden it entirely.
 
 ### "Which parts are real and which are simulated?"
 
@@ -343,28 +415,26 @@ Have a real answer. This one is genuinely good:
 
 ## 5. Demo path (5 minutes)
 
-Don't wander. Lead with the real data.
+Nine pages, but you only need five. Don't wander.
 
-1. **Home** — "Two data sources, and I label which is which." *Point at the callout.*
-2. **Real-World SCMS** — "This is 10,324 actual USAID shipments." Show the KPI band,
-   then the **mode trade-off chart**: "ocean is six times cheaper per kilo and eight
-   points less reliable — that's the sourcing decision in one picture."
-3. **Real-World SCMS → Vendors tab** — "I expected a bad manufacturer. It's their own
-   RDC channel, 82.9% on-time on a billion dollars."
-4. **Real-World SCMS → Data Provenance** — "And here's why I trust it: every ambiguous
-   value has a reason code. `N/A - From RDC` isn't missing data, it's a shipment that
-   never had a purchase order."
-5. **ML Models → Late Delivery** — "Trained on those real shipments. AUC 0.84, but
-   accuracy is below baseline." *Then show the gains curve.* "Top 20% by risk catches
-   61% of late deliveries. That's the deployable artefact."
-6. **Data Quality** — "The generic profiler scores that real file 99.3% complete and
-   grade A. It's wrong, and this table shows why." *(Best single slide in the deck.)*
-7. **Funnel Analytics** — "This half is simulated, and labelled as such — it covers
-   manufacturing, which SCMS doesn't reach." Show the bottleneck ranking.
-8. **A/B Testing** — "And here's how I'd decide whether a fix is worth the capital."
-   *Show the CI, then power.*
+1. **Home** — "Three pieces of work, and I label which data is real." *Ten seconds.*
+2. **ML Models → Drug Classification** — the headline. Show the confusion matrix,
+   then the feature importance: "Na/K carries about half the decision weight, which
+   is exactly the rule I found in EDA — the model recovering known structure is a
+   correctness check."
+3. **Funnel Analytics** — "Only 63% of procured units reach a patient." Show the
+   funnel, then the bottleneck table: "quality testing is worst on both volume and
+   time."
+4. **Real-World Operations** — "This half is real: 10,324 actual USAID shipments."
+   Show the vendor scorecard: "I expected a bad manufacturer. It's their own
+   internal channel."
+5. **A/B Testing** — "And this is how I'd decide whether a fix is worth the money."
+   Show the confidence interval, then the power analysis.
 
-If they interrupt with questions, follow them. Curiosity is a buying signal.
+If there's time, **Data Quality** is the best supporting page: the generic profiler
+scores the real SCMS file 99.3% complete and grade A, and it's wrong.
+
+Let questions redirect you. Curiosity is a buying signal.
 
 ## 6. Résumé bullets
 
@@ -382,8 +452,8 @@ Grounded in what the project actually does, leading with the real data:
 >   of late deliveries, a 3× lift).
 > - Designed and executed **A/B experiments** on four supply chain interventions using
 >   **Chi-Square tests, two-proportion z-tests and Welch's t-tests (SciPy)** with power
->   analysis and practical-significance gating, delivered through a 13-page interactive
->   **Streamlit** dashboard backed by 131 automated tests.
+>   analysis and practical-significance gating, delivered through a 9-page interactive
+>   **Streamlit** dashboard backed by 104 automated tests.
 
 ## 7. Things not to do
 
