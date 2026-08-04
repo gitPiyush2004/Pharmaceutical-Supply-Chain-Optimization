@@ -153,8 +153,8 @@ findings = pd.DataFrame([
     },
     {
         "priority": 5, "area": "Operations", "data": "REAL",
-        "finding": "Late delivery is predictable: ROC AUC 0.84, and the top 20% by "
-                   "predicted risk contains 61% of all late shipments.",
+        "finding": "Late delivery is predictable: ROC AUC 0.85, and the top 20% by "
+                   "predicted risk contains 63% of all late shipments.",
         "recommendation": "Run the model as a daily expeditor priority queue rather "
                           "than a binary gate.",
         "value_usd": 0.0,

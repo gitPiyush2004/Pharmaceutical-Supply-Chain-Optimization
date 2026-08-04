@@ -149,19 +149,20 @@ raw material, not to the manufacturing process.
 """)
 with col2:
     st.markdown("""
-**The weakest supplier is internal**
+**An internal channel collapsed**
 
-On real USAID data, the worst performer is the programme's own regional
-distribution centre channel at 82.9% on-time — not an external manufacturer.
+The worst performer is the programme's own distribution centre — and stratifying by
+era shows it degraded from 93.4% to 73.9% on-time after 2010, rather than always
+having been weak.
 
-*See: Real-World Operations*
+*See: Statistical Testing*
 """)
 with col3:
     st.markdown("""
 **Accuracy can be the wrong metric**
 
 The late-delivery model scores below the majority-class baseline, yet reviewing
-its top 20% by risk catches 61% of late shipments.
+its top 20% by risk catches 63% of late shipments.
 
 *See: ML Models*
 """)

@@ -63,7 +63,8 @@ def _service_metrics(frame: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
         # Freight share is wildly right-skewed on real data, so the median is the
         # honest summary; the mean is dominated by a handful of tiny line values.
         median_freight_pct=("freight_pct_of_value", "median"),
-        quantity=("quantity", "sum"),
+        packs=("packs_ordered", "sum"),
+        units=("units_ordered", "sum"),
     ).reset_index()
 
     out["on_time_pct"] = (100 * (1 - out["late_shipments"] / out["shipments"])).round(2)
@@ -71,8 +72,10 @@ def _service_metrics(frame: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
     out["median_delay_days"] = out["median_delay_days"].round(1)
     out["p90_delay_days"] = out["p90_delay_days"].round(1)
     out["median_freight_pct"] = out["median_freight_pct"].round(2)
-    out["freight_per_unit_usd"] = np.where(
-        out["quantity"] > 0, out["freight_cost_usd"] / out["quantity"], np.nan).round(4)
+    # Per *pack*, which is the unit the source data actually prices and ships in.
+    # An earlier version called this "per unit" while dividing by pack count.
+    out["freight_per_pack_usd"] = np.where(
+        out["packs"] > 0, out["freight_cost_usd"] / out["packs"], np.nan).round(4)
     out["late_shipments"] = out["late_shipments"].astype(int)
     return out
 
@@ -384,7 +387,10 @@ def scms_kpis(scms: pd.DataFrame | None = None) -> dict:
         "total_commodity_value_usd": round(float(df["line_value_usd"].sum()), 0),
         "total_freight_spend_usd": round(float(priced["freight_cost_usd"].sum()), 0),
         "median_freight_pct_of_value": round(float(df["freight_pct_of_value"].median()), 2),
-        "total_units": int(df["quantity"].sum()),
+        # Packs and units are reported separately because the source prices and
+        # ships in packs; conflating them under-reported units ~50-fold.
+        "total_packs": int(df["packs_ordered"].sum()),
+        "total_units": int(df["units_ordered"].sum()),
         "median_vendor_lead_time_days": round(
             float(df["vendor_lead_time_days"].median()), 1),
         "vendor_lead_time_coverage_pct": round(

@@ -195,13 +195,36 @@ def download_scms(force: bool = False):
 # ---------------------------------------------------------------------------
 # Parsing helpers
 # ---------------------------------------------------------------------------
-def _parse_dates(series: pd.Series) -> tuple[pd.Series, pd.Series]:
-    """Parse a mixed-format date column, classifying every unparseable value.
+#: Explicit date format per raw column. The file mixes two styles, but the mix is
+#: *between* columns and never within one: the three delivery milestones are
+#: day-first (``2-Jun-06``), the two paperwork milestones are US month-first
+#: (``11/18/09``).
+#:
+#: Pinning the format per column is not cosmetic. Inferring it with
+#: ``dayfirst=True`` silently mis-parses every ambiguous US date - ``5/3/13`` means
+#: 5 March but is read as 3 May, because pandas only falls back to month-first when
+#: day-first is impossible (day > 12). That corrupted every lead time derived from
+#: these columns.
+DATE_FORMATS: dict[str, str] = {
+    "PQ First Sent to Client Date": "%m/%d/%y",
+    "PO Sent to Vendor Date": "%m/%d/%y",
+    "Scheduled Delivery Date": "%d-%b-%y",
+    "Delivered to Client Date": "%d-%b-%y",
+    "Delivery Recorded Date": "%d-%b-%y",
+}
 
-    The file mixes ``2-Jun-06`` and ``9/11/14`` styles *and* uses literal strings
-    where a date is unknown or does not apply. Returns the parsed dates alongside
-    a reason code, so a caller can tell a genuinely missing milestone from one
-    that structurally never existed.
+
+def _parse_dates(series: pd.Series, date_format: str) -> tuple[pd.Series, pd.Series]:
+    """Parse one date column with an explicit format, classifying every failure.
+
+    Parameters
+    ----------
+    series
+        The raw column, which also carries literal strings where a date is unknown
+        or does not apply.
+    date_format
+        ``strptime`` format for this specific column - see :data:`DATE_FORMATS` for
+        why this must not be inferred.
 
     Returns
     -------
@@ -210,7 +233,7 @@ def _parse_dates(series: pd.Series) -> tuple[pd.Series, pd.Series]:
         ``"missing"`` or ``"unparseable"``.
     """
     raw = series.astype("string").str.strip()
-    parsed = pd.to_datetime(raw, format="mixed", dayfirst=True, errors="coerce")
+    parsed = pd.to_datetime(raw, format=date_format, errors="coerce")
 
     reason = pd.Series("parsed", index=series.index, dtype="object")
     unparsed = parsed.isna()
@@ -296,7 +319,7 @@ def load_scms() -> pd.DataFrame:
     # --- Dates, with provenance -------------------------------------------
     for original in DATE_COLUMNS:
         column = RENAME_MAP[original]
-        parsed, reason = _parse_dates(df[column])
+        parsed, reason = _parse_dates(df[column], DATE_FORMATS[original])
         df[column] = parsed
         df[f"{column}_reason"] = reason
 
@@ -308,6 +331,11 @@ def load_scms() -> pd.DataFrame:
     weight, weight_reason = _parse_numeric(raw["Weight (Kilograms)"])
     df["weight_kg"] = weight
     df["weight_reason"] = weight_reason
+
+    # The two raw text columns are now fully represented by the parsed numerics
+    # plus their reason codes, so keeping them would leave near-duplicate columns
+    # in the frame for a caller to pick the wrong one from.
+    df = df.drop(columns=["Freight Cost (USD)", "Weight (Kilograms)"], errors="ignore")
 
     # --- Categorical tidy-up ----------------------------------------------
     for column in ("country", "vendor", "manufacturing_site", "shipment_mode",
@@ -348,8 +376,12 @@ def load_scms() -> pd.DataFrame:
         100 * df["freight_cost_usd"] / df["line_value_usd"], np.nan)
     df["freight_cost_per_kg"] = np.where(
         df["weight_kg"] > 0, df["freight_cost_usd"] / df["weight_kg"], np.nan)
-    df["packs_ordered"] = np.where(
-        df["units_per_pack"] > 0, df["quantity"] / df["units_per_pack"], np.nan)
+    # `Line Item Quantity` is denominated in **packs**, not individual units:
+    # `line_value_usd == pack_price_usd * quantity` holds exactly for 9,685 of the
+    # 10,324 rows. Dividing by `units_per_pack` (as an earlier version did) was
+    # therefore backwards and under-reported the true unit count ~50-fold.
+    df["packs_ordered"] = df["quantity"]
+    df["units_ordered"] = df["quantity"] * df["units_per_pack"]
 
     # --- Calendar keys -----------------------------------------------------
     df["delivery_year"] = df["date_delivered"].dt.year

@@ -387,10 +387,21 @@ _FEATURE_NOTES = {
 
 _LIMITATIONS = {
     "drug_classification": (
-        "The clinical dataset has only 200 rows and an almost deterministic "
-        "decision rule, so near-perfect scores are expected and are not evidence "
-        "of a hard problem being solved. The value here is pipeline rigour, not "
-        "model heroics."
+        "The label is a **pure function of the features** — verified, with zero "
+        "exceptions in all 200 rows: `Na_to_K >= 15.015` gives DrugY, and below "
+        "that threshold blood pressure, cholesterol and a single age cut at 50 "
+        "resolve the remaining four exactly. High accuracy is therefore "
+        "arithmetically guaranteed to be reachable and is **not** evidence that a "
+        "hard problem was solved. The value here is pipeline rigour.\n\n"
+        "One genuine wrinkle: since the rule is deterministic, 100% should be "
+        "attainable — yet cross-validated accuracy plateaus at **99.5% for every "
+        "depth from 4 upward** (depth 3 is too shallow to express the rule at all, "
+        "reaching only 88.5%). On 200 rows, 99.5% is exactly one misclassified "
+        "patient. The cause is sample size, not capacity: the true boundary sits in "
+        "the narrow gap between 14.642 (highest non-DrugY ratio) and 15.015 (lowest "
+        "DrugY ratio), and a tree fitted on 150 rows does not always place its split "
+        "inside it. The residual error is threshold estimation, which is why the "
+        "single test error sits at Na/K 14.64 — the boundary value itself."
     ),
     "batch_risk": (
         "Macro F1 of ~0.70 on three imbalanced risk tiers reflects genuine "
@@ -402,8 +413,8 @@ _LIMITATIONS = {
     "late_delivery": (
         "Raw accuracy (0.879) sits marginally **below** the majority-class "
         "baseline (0.885), because only 11.5% of real shipments are late. That is "
-        "not a failure - it means accuracy is the wrong metric. ROC AUC of 0.84 "
-        "and a 3x lift at the top 20% show the model ranks risk well; it should be "
+        "not a failure - it means accuracy is the wrong metric. ROC AUC of 0.85 "
+        "and a 3.2x lift at the top 20% show the model ranks risk well; it should be "
         "deployed as a prioritisation queue, not a binary gate. The data also ends "
         "in 2015, so the learned relationships describe that era's network."
     ),

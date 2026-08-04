@@ -101,9 +101,22 @@ Government open data, covering $1.63B of commodity value across 73 vendors.
 ![Vendor scorecard](docs/images/scms_vendor_scorecard.png)
 
 **Finding.** I built this scorecard expecting a weak manufacturer. The worst
-performer is **"SCMS from RDC"** — an *internal* distribution channel, at 82.9%
-on-time across $1.09B. That's far more actionable: an internal channel doesn't
-need a contract renegotiation to fix.
+performer is **"SCMS from RDC"** — an *internal* distribution channel, not a
+supplier at all, carrying $1.09B of commodity value.
+
+But the pooled number is misleading, and that's the more interesting part. Stratified
+by time period, the gap against direct-drop fulfilment is **+1.9 points before 2011
+and +20.5 points after**:
+
+| Era | Direct Drop | From RDC | Gap |
+|---|---|---|---|
+| 2006–2010 | 95.3% | 93.4% | +1.9 pp |
+| 2011–2015 | 94.4% | **73.9%** | +20.5 pp |
+
+This is Simpson's paradox. The channel didn't start weak — it **collapsed after
+2010**. Quoting the pooled 11.9-point gap describes a permanent structural problem
+that never existed, and points at the wrong fix: this is a degradation to
+investigate, not a channel to replace.
 
 **A late-delivery model** trained on these shipments reaches **ROC AUC 0.84** —
 but its accuracy sits *below* the majority-class baseline, because only 11.5% of
@@ -112,8 +125,8 @@ ranking instead:
 
 ![Gains curve](docs/images/late_delivery_gains.png)
 
-Review the top 20% by predicted risk and you catch **61% of all late deliveries** —
-3× better than random. That's an expeditor's work queue, not a yes/no gate.
+Review the top 20% by predicted risk and you catch **63% of all late deliveries** —
+3.2× better than random. That's an expeditor's work queue, not a yes/no gate.
 
 ---
 

@@ -46,7 +46,7 @@
       "test_f1_macro": 0.7017,
       "test_precision": 0.7211,
       "test_recall": 0.6887,
-      "fit_seconds": 42.42
+      "fit_seconds": 30.83
     },
     {
       "model": "random_forest",
@@ -56,7 +56,7 @@
       "test_f1_macro": 0.6749,
       "test_precision": 0.7014,
       "test_recall": 0.6596,
-      "fit_seconds": 35.55
+      "fit_seconds": 26.82
     },
     {
       "model": "decision_tree",
@@ -66,7 +66,7 @@
       "test_f1_macro": 0.6424,
       "test_precision": 0.6399,
       "test_recall": 0.6453,
-      "fit_seconds": 2.61
+      "fit_seconds": 1.47
     }
   ],
   "features": [
@@ -4789,7 +4789,7 @@
   "test_rows": 600,
   "test_size": 0.25,
   "random_seed": 42,
-  "trained_at": "2026-08-01T22:50:41+00:00",
+  "trained_at": "2026-08-04T04:13:49+00:00",
   "platform_version": "1.0.0",
   "feature_engineering": {
     "median_cycle_time_days": 93.0

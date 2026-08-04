@@ -718,13 +718,14 @@ def predict_late_delivery(**features: Any) -> dict[str, Any]:
             else "Elevated" if probability >= 0.20 else "Low")
 
     # Driver text mirrors what the fitted model and the scorecards actually show:
-    # regional-distribution-centre fulfilment is the dominant risk factor (the
-    # "SCMS from RDC" channel is the worst-performing supplier at 82.9% on-time),
-    # not direct-drop ordering.
+    # regional-distribution-centre fulfilment is the dominant risk factor, not
+    # direct-drop ordering. Note the effect is era-dependent - the RDC channel ran
+    # at 93.4% on-time pre-2011 and 73.9% after - so the wording avoids implying a
+    # fixed rate. See src.analytics.experiments.stratified_comparison.
     drivers = []
     if str(row.get("fulfil_via")) == "From RDC":
         drivers.append("regional distribution centre fulfilment "
-                       "(the weakest channel at 82.9% on-time)")
+                       "(the weakest channel, and sharply degraded post-2010)")
     if str(row.get("shipment_mode")) in {"Ocean", "Truck"}:
         drivers.append(f"{row['shipment_mode']} transport "
                        "(the two slowest modes on record)")

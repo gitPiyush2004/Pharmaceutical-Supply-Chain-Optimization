@@ -82,7 +82,8 @@ kpi_row([
      "help_text": f"{kpis['late_shipments']:,} late"},
     {"label": "Commodity Value",
      "value": fmt_currency(kpis["total_commodity_value_usd"]),
-     "help_text": f"{fmt_units(kpis['total_units'])} units"},
+     "help_text": f"{fmt_units(kpis['total_units'])} units "
+                  f"({fmt_units(kpis['total_packs'])} packs)"},
     {"label": "Freight Spend",
      "value": fmt_currency(kpis["total_freight_spend_usd"]),
      "help_text": f"Median {kpis['median_freight_pct_of_value']:.1f}% of commodity value"},
@@ -240,7 +241,7 @@ with tab4:
                                title="On-Time Delivery by Product Group (%)",
                                orientation="h", text_format=".1f", height=340))
     show_table(products[["product_group_name", "shipments", "on_time_pct",
-                         "line_value_usd", "quantity", "median_freight_pct"]],
+                         "line_value_usd", "packs", "units", "median_freight_pct"]],
                height=240)
 
     st.markdown("**Manufacturing site reliability** (30+ shipments)")

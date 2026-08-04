@@ -350,6 +350,123 @@ def t_test_continuous(data: pd.DataFrame, metric: str = "processing_time",
     }
 
 
+#: Absolute skewness above which a mean-based test stops being trustworthy and the
+#: rank-based result should be quoted instead.
+SKEW_LIMIT = 2.0
+
+
+def mann_whitney_test(a: pd.Series, b: pd.Series, alpha: float | None = None,
+                      label_a: str = "Group A", label_b: str = "Group B") -> dict:
+    """Mann-Whitney U test - a rank-based alternative to Welch's t-test.
+
+    Compares *distributions* rather than means, so it survives the extreme right
+    skew that is normal in freight and cost data. Reports medians (the statistic it
+    actually speaks to) and the rank-biserial correlation as an effect size.
+
+    Returns
+    -------
+    dict
+        Per-group n and median, ``u_statistic``, ``p_value``,
+        ``rank_biserial`` (effect size, -1..1), ``alpha``, ``significant``.
+    """
+    cfg = get_config().ab_testing
+    alpha = float(cfg.alpha if alpha is None else alpha)
+
+    x, y = pd.Series(a).dropna(), pd.Series(b).dropna()
+    if len(x) < 2 or len(y) < 2:
+        return {"test": "Mann-Whitney U", "p_value": float("nan"),
+                "significant": False, "note": "insufficient data in one group",
+                f"n_{label_a}": len(x), f"n_{label_b}": len(y)}
+
+    u_stat, p_value = stats.mannwhitneyu(x, y, alternative="two-sided")
+    # Rank-biserial correlation: U rescaled to -1..1, interpretable as the
+    # probability that a random draw from one group exceeds one from the other.
+    rank_biserial = 2 * u_stat / (len(x) * len(y)) - 1
+
+    return {
+        "test": "Mann-Whitney U (rank-based)",
+        f"n_{label_a}": int(len(x)),
+        f"n_{label_b}": int(len(y)),
+        f"median_{label_a}": round(float(x.median()), 4),
+        f"median_{label_b}": round(float(y.median()), 4),
+        "median_difference": round(float(x.median() - y.median()), 4),
+        "u_statistic": round(float(u_stat), 1),
+        "p_value": float(p_value),
+        "rank_biserial": round(float(rank_biserial), 4),
+        "alpha": alpha,
+        "significant": bool(p_value < alpha),
+    }
+
+
+def compare_continuous(a: pd.Series, b: pd.Series, alpha: float | None = None,
+                       label_a: str = "Group A", label_b: str = "Group B") -> dict:
+    """Compare a continuous metric with both a mean-based and a rank-based test.
+
+    Which test to believe is not a matter of taste - it depends on the data. On
+    heavily skewed metrics the two disagree wildly: on SCMS freight cost per
+    kilogram (mean $38.93, median $7.26, max $31,088) Welch's t-test returns
+    p = 0.254 while Mann-Whitney returns p = 1.6e-93 on the *same* comparison.
+    Welch is comparing means that the outliers have rendered meaningless.
+
+    This runs both, measures the skew, and states which result to quote.
+
+    Returns
+    -------
+    dict
+        ``welch`` and ``mann_whitney`` sub-dicts, ``max_abs_skew``,
+        ``recommended_test``, ``tests_agree``, and ``verdict`` (plain English).
+    """
+    cfg = get_config().ab_testing
+    alpha = float(cfg.alpha if alpha is None else alpha)
+
+    x, y = pd.Series(a).dropna(), pd.Series(b).dropna()
+    if len(x) < 2 or len(y) < 2:
+        return {"recommended_test": "none", "tests_agree": False,
+                "verdict": "Insufficient data in one group to compare.",
+                "welch": None, "mann_whitney": None, "max_abs_skew": float("nan")}
+
+    # Welch on the raw values, framed as a two-arm frame so the existing helper
+    # can be reused rather than duplicated.
+    frame = pd.concat([
+        pd.DataFrame({"arm": "Treatment", "value": x}),
+        pd.DataFrame({"arm": "Control", "value": y}),
+    ], ignore_index=True)
+    welch = t_test_continuous(frame, metric="value", alpha=alpha)
+    rank = mann_whitney_test(x, y, alpha=alpha, label_a=label_a, label_b=label_b)
+
+    max_abs_skew = float(max(abs(stats.skew(x)), abs(stats.skew(y))))
+    skewed = max_abs_skew > SKEW_LIMIT
+    recommended = "mann_whitney" if skewed else "welch"
+    agree = bool(welch["significant"] == rank["significant"])
+
+    if skewed and not agree:
+        verdict = (
+            f"Skew is {max_abs_skew:.1f}, so the means are not a fair summary and "
+            f"the two tests disagree. Quote Mann-Whitney (p = {rank['p_value']:.2e}); "
+            f"Welch's p = {welch['p_value']:.3f} is an artefact of outliers."
+        )
+    elif skewed:
+        verdict = (
+            f"Skew is {max_abs_skew:.1f}, so quote Mann-Whitney "
+            f"(p = {rank['p_value']:.2e}). Both tests agree on the conclusion."
+        )
+    else:
+        verdict = (
+            f"Skew is {max_abs_skew:.1f}, within the range where means are "
+            f"meaningful. Welch's t-test applies (p = {welch['p_value']:.2e})."
+        )
+
+    return {
+        "welch": welch,
+        "mann_whitney": rank,
+        "max_abs_skew": round(max_abs_skew, 2),
+        "skew_limit": SKEW_LIMIT,
+        "recommended_test": recommended,
+        "tests_agree": agree,
+        "verdict": verdict,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Power analysis
 # ---------------------------------------------------------------------------
@@ -678,7 +795,9 @@ def run_all_experiments(sample_size: int | None = None) -> pd.DataFrame:
 
 __all__ = [
     "list_experiments", "simulate_experiment", "two_proportion_z_test",
-    "chi_square_test", "t_test_continuous", "required_sample_size", "achieved_power",
+    "chi_square_test", "t_test_continuous", "mann_whitney_test",
+    "compare_continuous", "required_sample_size", "achieved_power",
     "segment_analysis", "estimate_business_impact", "business_recommendation",
-    "run_experiment", "run_all_experiments", "PRACTICAL_SIGNIFICANCE_LIFT_PCT",
+    "run_experiment", "run_all_experiments",
+    "PRACTICAL_SIGNIFICANCE_LIFT_PCT", "SKEW_LIMIT",
 ]

@@ -34,7 +34,8 @@ Use this when someone says *"tell me about a project."*
 > Part of it runs on **real USAID data — 10,324 actual shipments to 43 countries**.
 > The most interesting finding came from there: I built a vendor scorecard expecting
 > a bad manufacturer, and the worst performer turned out to be their own internal
-> distribution channel at 82.9% on-time.
+> distribution channel. Then stratifying by year showed the pooled number was
+> **Simpson's paradox** — the channel didn't start weak, it collapsed after 2010.
 >
 > It's a Streamlit dashboard, nine pages, backed by 104 tests.
 
@@ -75,19 +76,25 @@ have invented five thousand purchase orders that never happened. So I gave every
 gap a reason code — structural absence, genuinely missing, or cross-referenced — and
 excluded structural absences from the statistics rather than filling them in."
 
-**Act 4 — The finding.**
+**Act 4 — The finding, and catching myself getting it wrong.**
 "I built the vendor scorecard expecting a bad manufacturer. The worst performer was
-**their own regional distribution centre channel** — 82.9% on-time across $1.09
-billion of product. That's a far more actionable finding, because an internal channel
-doesn't need a contract renegotiation to fix. And the mode analysis gave me the
-cost-service frontier straight from real numbers: ocean is six times cheaper per kilo
-than air and eight points less reliable."
+**their own regional distribution centre channel**, carrying $1.09 billion of product.
+I nearly reported that as an 11.9-point gap against direct-drop fulfilment.
+
+Then I stratified by time period, and the gap is **1.9 points before 2011 and 20.5
+points after**. It's Simpson's paradox. The channel didn't start weak — it collapsed
+after 2010 while direct drop held steady. The pooled number describes a permanent
+structural gap that never existed, and it points at the wrong fix: this is a
+degradation to investigate, not a channel to replace.
+
+I only caught it because I stratified. That's now a function in the codebase rather
+than something I remembered to do once."
 
 **Act 5 — Making the model useful, not just accurate.**
 "I trained a model to predict late delivery. ROC AUC 0.84 — but its accuracy was
 *below* the majority-class baseline, because only 11.5% of shipments are late. Rather
 than tune toward a vanity number, I changed the decision rule: I built a gains curve
-showing that reviewing the top 20% by predicted risk catches 61% of all late
+showing that reviewing the top 20% by predicted risk catches 63% of all late
 deliveries. That's an expeditor's work queue, and it's genuinely deployable."
 
 **Act 6 — The honest bit.**
@@ -114,12 +121,13 @@ Don't memorise everything. Memorise these — the real-data block especially.
 | **43 / 73 / 88** | Countries / vendors / manufacturing sites |
 | **$1.63B** | Total commodity value moved |
 | **88.5%** | Actual on-time delivery |
-| **82.9%** | Worst performer — the internal RDC channel, on $1.09B of value |
+| **93.4% → 73.9%** | RDC channel on-time, pre-2011 vs post-2010 — the collapse |
+| **+1.9 → +20.5 pp** | RDC gap by era (pooled 11.9 pp is Simpson's paradox) |
 | **$1.68 vs $10.02** | Ocean vs air freight, per kg (82.5% vs 90.4% on-time) |
 | **44%** | Share of line items with a vendor PO date — the rest bypass vendor ordering |
 | **61% / 27% / 11.5%** | Arrive exactly on schedule / early / late |
-| **0.845** | Late-delivery model ROC AUC |
-| **61% at top 20%** | Late deliveries caught by reviewing the riskiest fifth (3.0× lift) |
+| **0.848** | Late-delivery model ROC AUC |
+| **63% at top 20%** | Late deliveries caught by reviewing the riskiest fifth (3.2× lift) |
 
 ### Simulated manufacturing side
 
@@ -244,14 +252,15 @@ being caught by it.
 
 A great question to get. Have this ready — it is the best story in the project.
 
-> I built the vendor scorecard expecting to find a bad manufacturer. The worst
-> performer turned out to be **"SCMS from RDC"** — which isn't a supplier at all. It's
-> their own regional distribution centre channel, running at 82.9% on-time across
-> $1.09 billion of commodity value.
+> Twice, actually. First: I built the vendor scorecard expecting a bad manufacturer,
+> and the worst performer turned out to be **"SCMS from RDC"** — not a supplier at all,
+> but their own regional distribution centre channel, carrying $1.09 billion.
 >
-> That reframed the finding completely. A bad external supplier is a procurement
-> problem that needs a contract renegotiation. A bad *internal* channel is an
-> operations problem you already control.
+> Second, and more usefully — I nearly reported that wrong. The pooled gap is 11.9
+> points, but stratified by era it's **1.9 points before 2011 and 20.5 after**. Textbook
+> Simpson's paradox. The channel degraded; it wasn't always weak. That completely
+> changes the recommendation: you investigate what changed around 2010, you don't
+> replace a channel that used to work fine.
 >
 > And the machine learning corroborated it from a different direction — the top
 > feature in the late-delivery model is fulfilment route, ahead of transport mode or
@@ -266,9 +275,9 @@ If they spot this, they are testing whether you understand your own metrics.
 > "on time" scores 88.5%. My model gets 87.9% — marginally worse, and completely
 > useless as a comparison.
 >
-> The metrics that matter are ROC AUC, which is 0.84, and the gains curve. If an
-> expeditor has capacity to review a fifth of shipments, the model surfaces **61% of
-> everything that will actually be late** — three times better than picking at random.
+> The metrics that matter are ROC AUC, which is 0.85, and the gains curve. If an
+> expeditor has capacity to review a fifth of shipments, the model surfaces **63% of
+> everything that will actually be late** — over three times better than random.
 > That's a real operational tool.
 >
 > So the fix isn't a better model, it's a better decision rule: use the predicted
@@ -427,7 +436,8 @@ Nine pages, but you only need five. Don't wander.
    time."
 4. **Real-World Operations** — "This half is real: 10,324 actual USAID shipments."
    Show the vendor scorecard: "I expected a bad manufacturer. It's their own
-   internal channel."
+   internal channel — and here's the stratified view showing the pooled number was
+   Simpson's paradox."
 5. **A/B Testing** — "And this is how I'd decide whether a fix is worth the money."
    Show the confidence interval, then the power analysis.
 
@@ -443,13 +453,15 @@ Grounded in what the project actually does, leading with the real data:
 > - Analysed **10,324 real USAID pharmaceutical shipments** (43 countries, 73 vendors,
 >   $1.63B commodity value) using **Python (Pandas, Plotly)**, building a procurement
 >   funnel and vendor scorecard that identified an internal distribution channel — not
->   an external supplier — as the weakest link at 82.9% on-time across $1.09B of product.
+>   an external supplier — as the weakest link, and used stratified analysis to show the
+>   apparent 11.9pp service gap was Simpson's paradox masking a post-2010 collapse
+>   from 93.4% to 73.9% on-time.
 > - Built an end-to-end **machine learning pipeline** across three models — drug
 >   classification, batch stability risk, and late-delivery prediction on real shipment
 >   data — with group-wise imputation, leakage-controlled feature engineering and
 >   grid-searched selection across Decision Tree, Random Forest and XGBoost under
->   stratified cross-validation (**ROC AUC 0.84**; top-20% risk targeting captures 61%
->   of late deliveries, a 3× lift).
+>   stratified cross-validation (**ROC AUC 0.85**; top-20% risk targeting captures 63%
+>   of late deliveries, a 3.2× lift).
 > - Designed and executed **A/B experiments** on four supply chain interventions using
 >   **Chi-Square tests, two-proportion z-tests and Welch's t-tests (SciPy)** with power
 >   analysis and practical-significance gating, delivered through a 9-page interactive
