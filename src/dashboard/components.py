@@ -9,6 +9,7 @@ is genuinely page-specific - the analysis and the narrative.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -162,6 +163,31 @@ def kpi_row(cards: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Callouts
 # ---------------------------------------------------------------------------
+#: Inline markdown the callouts actually use. Ordered: bold is consumed before
+#: italic, so the second pattern only ever sees single asterisks.
+_MD_CODE = re.compile(r"`([^`]+)`")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_ITALIC = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", re.DOTALL)
+
+
+def _inline_markdown(text: str) -> str:
+    """Convert the inline markdown in callout text to HTML.
+
+    Needed because :func:`callout` wraps its text in a ``<div>``, and CommonMark
+    does not parse markdown inside a block-level HTML element - so Streamlit
+    rendered ``**60% of value**`` as literal asterisks on every callout in the
+    dashboard. Converting here rather than at the 59 call sites keeps the
+    markdown syntax the pages are already written in.
+
+    Only the three constructs the callouts use are handled. Anything else is
+    passed through untouched, including deliberate HTML such as
+    :func:`verdict_badge` output.
+    """
+    text = _MD_CODE.sub(r"<code>\1</code>", text)
+    text = _MD_BOLD.sub(r"<b>\1</b>", text)
+    return _MD_ITALIC.sub(r"<i>\1</i>", text)
+
+
 def callout(text: str, kind: str = "insight", title: str | None = None) -> None:
     """Render a coloured callout box.
 
@@ -172,8 +198,9 @@ def callout(text: str, kind: str = "insight", title: str | None = None) -> None:
         ``danger`` (red).
     """
     heading = f"<b>{title}</b><br>" if title else ""
-    st.markdown(f'<div class="pc-callout pc-{kind}">{heading}{text}</div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="pc-callout pc-{kind}">{heading}{_inline_markdown(text)}</div>',
+        unsafe_allow_html=True)
 
 
 def insight(text: str, title: str = "What this means") -> None:
