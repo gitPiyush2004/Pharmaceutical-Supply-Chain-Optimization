@@ -1,6 +1,6 @@
 # Pharmaceutical Supply Chain Optimization
 
-### Delivery funnel · Data quality · Machine learning · Procurement pricing
+### Funnel analytics · A/B testing · Machine learning
 
 An end-to-end analytics platform on **two real pharmaceutical datasets**: where $259M
 of commodity value arrives late across 10,324 actual USAID shipments, whether the
@@ -40,7 +40,7 @@ arrive on time?" and "did we pay a fair price?" are answered on the same rows.
 
 ---
 
-## 1 · Where value arrives late
+## 1 · Funnel analysis — where value arrives late
 
 ![Value funnel](docs/images/value_funnel.png)
 
