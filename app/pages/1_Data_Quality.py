@@ -1,7 +1,7 @@
 """
 Data Quality page.
 
-Audits all three real datasets on five weighted dimensions, and then makes an
+Audits both real datasets on five weighted dimensions, and then makes an
 argument against its own headline number. Generic profiling gives the USAID SCMS
 file a grade A, and that grade is wrong in a way worth understanding: the file's
 defects are semantic rather than structural, so a null check cannot see them.
@@ -34,11 +34,11 @@ from src.viz.theme import fmt_pct
 page_setup(
     title="Data Quality Assessment",
     icon="🧪",
-    subtitle="Auditing three real datasets - and why the headline score on the "
-             "messiest one is misleading",
+    subtitle="Auditing both real datasets - and why the headline score on the "
+             "messier one is misleading",
 )
 
-DATASETS = ["scms", "indian_medicines", "drug200"]
+DATASETS = ["scms", "drug200"]
 DIMENSIONS = ["completeness", "uniqueness", "validity", "consistency", "accuracy"]
 
 
@@ -71,14 +71,14 @@ parsing = _scms_parsing()
 worst_published = published.iloc[0]
 kpi_row([
     {"label": "Datasets Audited", "value": f"{len(published)}",
-     "help_text": "All three are real and publicly available"},
+     "help_text": "Both are real and publicly available"},
     {"label": "Rows Profiled",
      "value": f"{int(published['rows'].sum()):,}",
-     "help_text": "253,973 Indian products, 10,324 SCMS shipments, 200 patients"},
+     "help_text": "10,324 SCMS shipments and 200 patient records"},
     {"label": "Lowest Published Score",
      "value": f"{worst_published['overall_score']:.2f}",
      "help_text": f"{worst_published['dataset']} - grade "
-                  f"{worst_published['grade']}. Every dataset scores an A, which "
+                  f"{worst_published['grade']}. Both datasets score an A, which "
                   f"is the problem."},
     {"label": "SCMS Freight Usable",
      "value": fmt_pct(float(
@@ -103,7 +103,7 @@ chart(charts.heatmap(
     colorscale="Blues", text_format=".1f"))
 
 callout(
-    "**All three datasets score grade A, and one of them is a mess.** That is not a "
+    "**Both datasets score grade A, and one of them is a mess.** That is not a "
     "flattering result for the scoring function — it is the finding. Generic "
     "profiling asks whether cells are populated, unique and in range. It cannot ask "
     "whether a populated cell means anything. The next two sections show what it "
@@ -166,7 +166,7 @@ section(
 show_table(uplift)
 
 scms_row = uplift[uplift["dataset"] == "scms"].iloc[0]
-indian_row = uplift[uplift["dataset"] == "indian_medicines"].iloc[0]
+drug_row = uplift[uplift["dataset"] == "drug200"].iloc[0]
 insight(
     f"**Parsing SCMS makes its score go *down*, by "
     f"{abs(scms_row['uplift']):.2f} points** — completeness falls "
@@ -177,13 +177,12 @@ insight(
     f"generic score **rewards a file for holding non-null garbage**, and any "
     f"pipeline judged on *did the quality score improve* would be incentivised "
     f"to leave the garbage in place. The interpreted layer is unambiguously more "
-    f"trustworthy and scores worse for it.\n\n"
-    f"The Indian dataset moves the other way ({indian_row['uplift']:+.2f}), because "
-    f"there the parsing genuinely recovers information: a price column stored as "
-    f"text becomes a number, and pack labels become a form plus a quantity. And "
-    f"drug200 is flat at {uplift[uplift['dataset'] == 'drug200'].iloc[0]['uplift']:+.2f} "
-    f"— it is published clean, so there is nothing to recover and no attempt is "
-    f"made to invent a difference."
+    f"trustworthy and scores worse for it. There is a test asserting the sign stays "
+    f"negative: if it ever turned positive it would mean the parser had started "
+    f"imputing instead of nulling.\n\n"
+    f"`drug200` is the control at {drug_row['uplift']:+.2f} — it is published clean, "
+    f"so there is nothing to recover and no attempt is made to invent a difference "
+    f"that would make the comparison look better."
 )
 
 chart(charts.heatmap(

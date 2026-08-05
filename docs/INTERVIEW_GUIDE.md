@@ -13,7 +13,7 @@ competent one — and it is what this project is built around.
 
 Use this when someone says *"tell me about a project."*
 
-> I built a pharmaceutical analytics platform on three real public datasets — no
+> I built a pharmaceutical analytics platform on two real public datasets — no
 > simulated data anywhere.
 >
 > **The core of it** is 10,324 actual USAID shipments of HIV and malaria medicines to
@@ -32,7 +32,7 @@ Use this when someone says *"tell me about a project."*
 > always guessing "on time", because only 11.5% are late. So I deployed it as a
 > ranking instead: reviewing the riskiest 20% catches 63% of late deliveries.
 >
-> Streamlit dashboard, nine pages, 137 tests.
+> Streamlit dashboard, nine pages, 141 tests.
 
 **Then stop.** Let them pick where to go. Whatever they ask about, you have depth.
 
@@ -169,14 +169,17 @@ Don't memorise everything. Memorise the top block.
 | **0.881 vs 0.885** | Late-delivery accuracy vs majority baseline — *below* it |
 | **63.3% at top 20%** | Late deliveries caught by the riskiest fifth (3.2× lift) |
 
-### Indian market
+### Product & pricing (same SCMS file)
 
 | Number | What it is |
 |---|---|
-| **253,973 / 7,642** | Products / manufacturers |
-| **1.2% / 7.7% / HHI 12** | Largest firm's share / top ten / Herfindahl (concern threshold: 2,500) |
-| **8,992 brands, 2,413 makers** | Cefixime alone — ₹151 spread on identical composition |
-| **51 pp vs 1.1 pp** | Discontinuation spread by manufacturer vs by price quartile |
+| **184 / 86 / 88** | Catalogue items / molecules / factories — SCMS is a catalogue too |
+| **5.0× vs 2.5×** | Price spread for identical products, pooled vs within-year |
+| **80%** | Efavirenz 600mg price decline 2006→2015 (why pooling misleads) |
+| **2.1×** | Median branded premium over generic, same product, same year |
+| **6.7×** | Nevirapine 200mg 2009: $0.050 generic vs $0.335 Viramune |
+| **63% / 94%** | Share of priced value in the top 5 / top 15 of 92 products |
+| **82.9%** | Line items with a usable unit price — the rest are excluded, not zeroed |
 
 If you forget a number, say *"I'd need to check the exact figure, but the order of
 magnitude was…"* That is a completely acceptable answer and far better than guessing.
@@ -386,6 +389,22 @@ If you get this, you're talking to someone good. Have the answer ready.
 > the effect is a tail effect. That case is what convinced me a blanket rule needs a
 > stated exception rather than a silent one.
 
+### "You dropped a dataset. Why?"
+
+> I had a third one — a 253,973-row Indian medicine catalogue — driving a
+> market-structure page. I removed it, and I think that was the right call.
+>
+> It answered the same question worse. It carried *list* prices for products nobody in
+> my dataset actually bought, and it couldn't be joined to anything. SCMS carries
+> prices **actually paid**, on the same rows as the delivery performance, so I can ask
+> "did the cheaper supplier also deliver on time?" and get an answer. That question is
+> unanswerable with a separate catalogue.
+>
+> The honest cost is scale: the project went from about 264,000 rows to 10,500. If
+> someone wants to see big-data handling, that's a fair criticism. My view is that two
+> datasets that both earn their place beats three where one is decoration — and it made
+> the whole thing explainable in 60 seconds instead of 90.
+
 ### "Everything is real data now. What did you lose by dropping the simulation?"
 
 > Randomisation, and two analyses.
@@ -493,29 +512,46 @@ Have two answers. Both are true and both are better than a rehearsed weakness.
 > drug200 is flat at zero, because it's published clean and I didn't manufacture a
 > difference to make the comparison look better.
 
-### "Why report the Indian market data descriptively instead of modelling it?"
+### "Tell me about the pricing analysis."
 
-> Because the obvious model would have been a lie with a confidence score attached.
-> The file has 253,973 rows and an `Is_discontinued` flag, so training a classifier
-> is the reflexive move. Three reasons not to:
+This is the answer that shows you learned something and then reused it.
+
+> SCMS is usually treated as a logistics file, but every line also carries the
+> molecule, brand, dosage, factory and the price actually paid. So I asked whether the
+> programme paid a consistent price for the same thing.
 >
-> The `type` column has exactly one value — `allopathy` — across all 253,973 rows, so
-> it carries no information. The target is 31:1 imbalanced. And the file has no
-> launch date, no sales volume and no therapeutic class: the features that would
-> actually predict a withdrawal decision are simply absent.
+> Pooled across all ten years, identical products — same molecule, same strength, same
+> dosage form — show a **5.0x** price spread. That looks like a scandal. It isn't.
+> Antiretroviral prices collapsed over that decade: Efavirenz 600mg fell **80%**, from
+> $0.56 a unit to $0.11. So a pooled comparison is measuring *when* you bought, not
+> *who* from. Within a single year the spread is **2.5x** — pooling inflated it by
+> exactly a factor of two.
 >
-> What settled it was looking at where the variance is. Discontinuation varies by
-> **51 percentage points between manufacturers** but only **1.1 points across price
-> quartiles**. A manufacturer effect that large with essentially no price effect isn't
-> product economics — it's catalogue refresh timing in the source. Some firms have
-> pruned their listings and some haven't. A model would have learned which
-> manufacturers happen to have tidied their catalogue, dressed up as withdrawal risk.
+> **That's the same mistake I'd already found in the delivery data**, where a pooled
+> 11.9-point service gap was 1.9 points before 2011 and 20.5 after. Finding the
+> identical trap twice on two unrelated questions is why every comparison in the
+> project is stratified by year before it gets quoted.
 >
-> So the dataset drives market structure instead, which it genuinely supports: 7,642
-> manufacturers, a Herfindahl index of 12 against a regulatory concern threshold of
-> 2,500, and Cefixime alone sold under 8,992 brand names with a ₹151 spread between
-> price quartiles on identical composition. That last one is an actionable
-> procurement finding.
+> Then I checked whether the remaining 2.5x was just noise. It isn't — it's generic
+> versus originator. Where both were bought in the same year, branded costs a median
+> **2.1x** more across 41 product-years. Nevirapine 200mg is the clearest: three Indian
+> factories at $0.050 a unit, Boehringer's Viramune at $0.335. **6.7x for the same
+> molecule at the same strength in the same year.**
+
+**The follow-up you should invite:** *"So they were overpaying?"*
+
+> I can't say that, and this is the important part. The expensive supplier delivered
+> **100% on time**; the cheapest was at 86%. The premium buys something measurable. And
+> nothing in the file records freight terms, volume commitments, urgency, or whether a
+> product was registered in the destination country — all of which legitimately move
+> price.
+>
+> So the honest statement is: the choice exists, here's what each side costs on both
+> price and service, and whether 6.7x is worth 14 points of reliability is a
+> procurement judgement rather than something my analysis settles.
+
+**Why it matters commercially:** 63% of priced spend sits in five products. So this
+isn't a 92-product renegotiation — it's five conversations.
 
 ### "What was the hardest technical problem?"
 
@@ -612,7 +648,7 @@ Have two answers. Both are true and both are better than a rehearsed weakness.
 
 ## 5. Demo path (5 minutes)
 
-Nine pages, but you only need five. Don't wander.
+Nine pages, but you only need five or six. Don't wander.
 
 1. **Home** — "Three real datasets, no simulation." *Ten seconds.*
 2. **Delivery Pipeline** — "$259M arrives late. And there's no unit funnel here on
@@ -626,7 +662,11 @@ Nine pages, but you only need five. Don't wander.
    power."
 4. **ML Models → Late Delivery** — "Accuracy below baseline. Here's why I ship it
    anyway." Show the gains curve.
-5. **Data Quality** — "The generic profiler grades this file an A, and it's wrong.
+5. **Product & Pricing** — "Same file, different question. The pooled price spread is
+   5x, the honest one is 2.5x, and the gap is a decade of falling prices — the same
+   trap as slide 3." Then the Nevirapine factory table: $0.050 generic against $0.335
+   branded, but the expensive one delivered 100% on time.
+6. **Data Quality** — "The generic profiler grades this file an A, and it's wrong.
    Parsing it correctly makes the score go *down*."
 
 If there's time, **Insights** is the best closer — every finding carries a "does not
@@ -655,9 +695,13 @@ Grounded in what the project actually does:
 > - Designed a **statistical testing framework** (SciPy, statsmodels) using
 >   **two-proportion z-tests, chi-square, Welch's t-test and Mann-Whitney U** with
 >   power analysis, minimum-detectable-effect bounds for null results, and
->   practical-significance gating — delivered through a **9-page Streamlit dashboard**
->   over three real datasets (253,973-product market analysis included), backed by
->   **137 automated tests**.
+>   practical-significance gating.
+> - Built a **procurement pricing analysis** on the same shipment data, showing the
+>   pooled price spread for identical products (5.0×) was **double** the within-year
+>   figure (2.5×) once a decade-long 80% price decline was controlled for, and
+>   quantifying a **2.1× median generic-to-branded premium** across 41 product-years —
+>   with 63% of spend concentrated in five products. Delivered through a **9-page
+>   Streamlit dashboard** backed by **141 automated tests**.
 
 ## 7. Things not to do
 
@@ -712,9 +756,15 @@ Places where you have real depth, if the conversation goes technical:
   the 20% figure encodes.
 - **Probability calibration** — why a tree grown to pure leaves produces degenerate
   probabilities, what that breaks operationally, and the two standard fixes.
-- **Herfindahl index on listing share** — what it measures, why 12 against a 2,500
-  threshold means fragmentation, and why a Pareto chart with a fixed 80% line would
-  have been actively misleading on a market this flat.
+- **Why the 80% Pareto line is drawn on one chart and omitted elsewhere** — on SCMS
+  product value the cumulative curve genuinely reaches 94% by the fifteenth product,
+  so the reference line is meaningful; on a flat distribution it sits far above the
+  curve and makes the chart look broken. The builder takes it as an optional argument
+  for exactly that reason.
+- **Max-over-min as a spread measure** — why it is deliberately crude, why the median
+  across products is quoted rather than any single ratio, and why the factory-level
+  view matters (a spread is only actionable if it maps onto suppliers you can choose
+  between).
 - **Configuration design** — every threshold in one auditable YAML file, including the
   two that decide *how a statistic gets reported* (`skew_limit`, `min_group_size`), so
   that choice is written down once instead of made per chart.

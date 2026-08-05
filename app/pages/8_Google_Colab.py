@@ -177,13 +177,13 @@ with tab_dashboard:
 cd {GITHUB_REPO}
 pip install -r requirements.txt
 
-python scripts/fetch_data.py        # cache the external datasets (needed here)
+python scripts/fetch_data.py        # cache the SCMS export (needed here)
 python scripts/train_models.py      # train and persist both models
 streamlit run app/Home.py           # launch this dashboard""", language="bash")
     st.caption(
-        "The dashboard's other pages read the larger datasets and the persisted "
-        "model artefacts, so both steps are required here even though the notebook "
-        "does not need them.")
+        "The dashboard's other pages read the SCMS export and the persisted model "
+        "artefacts, so both steps are required here even though the notebook does "
+        "not need them.")
 
 callout(
     f"Everything is seeded with `random_seed={cfg.project.random_seed}`, so a clean "
@@ -207,9 +207,9 @@ size. On Colab the wall-clock time is dominated almost entirely by that first ce
 cloning and installing, typically one to two minutes.
 
 **Scope.** The notebook covers the drug200 dataset **only** — no other dataset is
-loaded, imported or referenced anywhere in it. The supply chain and market analysis
-lives on the other pages of this dashboard rather than being mixed into a clinical
-notebook.
+loaded, imported or referenced anywhere in it. The supply chain, pricing and
+statistical analysis lives on the other pages of this dashboard rather than being
+mixed into a clinical notebook.
 
 **Where the effort went.** Sections 3 and 4 — data quality and cleaning — are the
 largest part of the notebook. The published file is clean, so realistic ingestion

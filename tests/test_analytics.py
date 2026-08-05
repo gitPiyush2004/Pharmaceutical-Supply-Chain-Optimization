@@ -1,5 +1,5 @@
 """
-Tests for the analytics modules: pipeline, market and the statistics toolkit.
+Tests for the analytics modules: pipeline, products and the statistics toolkit.
 
 The focus is on internal consistency - shares summing to 100, funnels that are
 actually monotone, statistics anchored against hand-computed values - because
@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.analytics import ab_testing, market, pipeline
+from src.analytics import ab_testing, pipeline, products
 
 
 # ---------------------------------------------------------------------------
@@ -86,67 +86,126 @@ class TestPipeline:
 
 
 # ---------------------------------------------------------------------------
-# Indian market structure
+# Product catalogue and pricing
 # ---------------------------------------------------------------------------
-class TestMarket:
-    def test_kpis_match_the_frame(self, indian_medicines):
-        kpis = market.market_kpis(indian_medicines)
-        assert kpis["products"] == len(indian_medicines)
-        assert kpis["manufacturers"] == indian_medicines["manufacturer"].nunique()
-        assert 0 < kpis["median_price_inr"] < kpis["p90_price_inr"]
+class TestProducts:
+    def test_catalogue_kpis_match_the_frame(self, scms):
+        kpis = products.catalogue_kpis(scms)
+        assert kpis["line_items"] == len(scms)
+        assert kpis["molecules"] == scms["molecule"].nunique()
+        assert kpis["manufacturing_sites"] == scms["manufacturing_site"].nunique()
+        # The pricing analysis runs on a subset, and the page states which.
+        assert 0 < kpis["priced_line_items"] <= kpis["line_items"]
+        assert kpis["priced_coverage_pct"] == pytest.approx(
+            100 * kpis["priced_line_items"] / kpis["line_items"], abs=0.01)
 
-    def test_concentration_shares_are_cumulative(self, indian_medicines):
-        conc = market.manufacturer_concentration(indian_medicines)
-        assert conc["products"].is_monotonic_decreasing
+    def test_zero_prices_are_excluded_not_counted(self, scms):
+        """A price of zero is an unrecorded price, not a free medicine.
+
+        Counting them would drag every minimum to zero and make every spread ratio
+        infinite, so they must be dropped rather than treated as $0 purchases.
+        """
+        priced = products._priced(scms)
+        assert (priced["unit_price_usd"] > 0).all()
+        assert len(priced) < len(scms), "some rows do carry an unusable price"
+
+    def test_product_mix_shares_sum_to_100(self, scms):
+        mix = products.product_mix(scms)
+        assert mix["value_share_pct"].sum() == pytest.approx(100.0, abs=0.1)
+        assert mix["value_usd"].is_monotonic_decreasing
+        assert mix["on_time_pct"].between(0, 100).all()
+
+    def test_value_concentration_is_cumulative_and_concentrated(self, scms):
+        """Spend concentration is the case for doing the pricing work at all."""
+        conc = products.value_concentration(scms)
+        assert conc["value_usd"].is_monotonic_decreasing
         assert conc["cumulative_share_pct"].is_monotonic_increasing
-        assert conc["cumulative_share_pct"].iloc[-1] <= 100.01
+        assert conc["cumulative_share_pct"].iloc[-1] == pytest.approx(100.0, abs=0.5)
+        # Verified: top 5 ~63%, top 15 ~94%. This is what licenses the 80% Pareto
+        # line on the page, which is deliberately omitted from flat distributions.
+        assert conc.attrs["top_5_share_pct"] > 50
+        assert conc.attrs["top_15_share_pct"] > 85
 
-    def test_market_is_measured_as_fragmented(self, indian_medicines):
-        """The headline market finding, pinned.
+    def test_value_concentration_labels_are_unique(self, scms):
+        """Regression: molecule + dosage alone is not a unique product.
 
-        The Herfindahl index here is near zero - 7,642 manufacturers with no
-        incumbent. The Home and market pages both assert fragmentation, and a
-        regression that grouped manufacturers too aggressively would quietly turn
-        that story into a false concentration finding.
+        "Abacavir 300mg" exists as a tablet and as a blister-packed tablet,
+        "Zidovudine 10mg/ml" as an oral solution and an injection. Those are
+        clinically different products, and a shared display label would merge them
+        into one bar. The dosage form is appended only where it is needed - 25 of 92
+        labels - rather than everywhere, which would push most past 50 characters.
         """
-        summary = market.concentration_summary(indian_medicines)
-        assert summary.attrs["hhi"] < 1500
-        assert "Fragmented" in summary.attrs["interpretation"]
+        conc = products.value_concentration(scms)
+        assert conc["product"].is_unique
+        # Disambiguation is targeted, not blanket: some labels need the form, most
+        # do not. A regression that appended it unconditionally would hit 100%.
+        with_form = conc["product"].str.contains(r"\(")
+        assert 0 < with_form.sum() < len(conc) / 2
 
-    def test_price_buckets_partition_all_priced_products(self, indian_medicines):
-        prices = market.price_distribution(indian_medicines)
-        # Strictly positive, not merely non-null: four products carry a price of
-        # exactly 0, which cannot be placed on a log scale and is treated as
-        # unrecorded rather than as free.
-        priced = int((indian_medicines["price_inr"] > 0).sum())
-        assert prices["products"].sum() == priced
-        assert prices["share_pct"].sum() == pytest.approx(100.0, abs=0.1)
-        # Log-spaced, so each bucket's floor is the previous bucket's ceiling.
-        assert np.allclose(prices["bucket_low"].to_numpy()[1:],
-                           prices["bucket_high"].to_numpy()[:-1])
+        # And it must survive the chart layer's truncation too.
+        from src.viz.charts import shorten_labels
+        shortened, _ = shorten_labels(conc.copy(), "product")
+        assert shortened["product"].is_unique
 
-    def test_discontinuation_is_reported_with_its_caveat(self, indian_medicines):
-        """The manufacturer effect must dominate the price effect.
+    def test_pooled_spread_exceeds_within_year_spread(self, scms):
+        """The central finding of the module, asserted rather than narrated.
 
-        This is why the project reports discontinuation descriptively instead of
-        modelling it. If the spreads ever inverted, that decision would need
-        revisiting - so the asymmetry is asserted, not just described in prose.
+        Pooling ten years of a falling market inflates the apparent price spread.
+        If this ever inverted, the page's whole argument would be wrong.
         """
-        disc = market.discontinuation_analysis(indian_medicines)
-        assert disc["manufacturer_spread_pp"] > 10 * disc["price_band_spread_pp"]
-        assert disc["price_is_predictive"] is False
-        assert "listing" in disc["caveat"]
+        summary = products.pricing_summary(scms)
+        assert (summary["pooled_median_spread_x"]
+                > summary["within_year_median_spread_x"])
+        assert summary["inflation_factor"] > 1.5
+        assert summary["within_year_products"] > summary["pooled_products"], (
+            "holding the year fixed should yield more comparable groups, not fewer")
 
-    def test_ingredient_analysis_is_ranked_and_plausible(self, indian_medicines):
-        ingredients = market.ingredient_analysis(indian_medicines)
-        assert ingredients["brands"].is_monotonic_decreasing
-        # A molecule cannot be sold by more manufacturers than it has brands.
-        assert (ingredients["manufacturers"] <= ingredients["brands"]).all()
+    def test_spread_thresholds_are_enforced(self, scms, cfg):
+        """A product bought three times has a range that is just three numbers."""
+        floor = cfg.scms.products
+        for frame in (products.price_spread(scms),
+                      products.price_spread_within_year(scms)):
+            assert (frame["line_items"] >= floor.min_shipments_for_spread).all()
+            assert (frame["sites"] >= floor.min_sites_for_spread).all()
+            # max/min is by definition at least 1.
+            assert (frame["spread_x"] >= 1.0).all()
 
-    def test_pack_form_shares_are_bounded(self, indian_medicines):
-        packs = market.pack_form_analysis(indian_medicines)
-        assert packs["share_pct"].between(0, 100).all()
-        assert packs["products"].is_monotonic_decreasing
+    def test_price_trend_declines_over_the_decade(self, scms):
+        """Efavirenz 600mg is the reference case for why pooling misleads."""
+        trend = products.price_trend(scms, molecule="Efavirenz", dosage="600mg")
+        assert len(trend) >= 8, "expected most of the 2006-2015 window"
+        assert trend["delivery_year"].is_monotonic_increasing
+        assert trend.attrs["decline_pct"] > 50, "the price collapse is the point"
+        assert (trend["min_price"] <= trend["median_price"]).all()
+        assert (trend["median_price"] <= trend["max_price"]).all()
+
+    def test_brand_premium_is_like_for_like(self, scms):
+        """Both arms must exist in the same product-year, or it is a mix effect."""
+        premium = products.brand_premium(scms)
+        assert len(premium) > 0
+        assert (premium["premium_x"] > 0).all()
+        assert premium.attrs["median_premium_x"] > 1.0, (
+            "branded product is expected to cost more than the same generic")
+        # The headline case: Nevirapine branded as Viramune.
+        top = premium.iloc[0]
+        assert top["branded_price"] > top["generic_price"]
+
+    def test_brand_premium_label_is_unique_per_row(self, scms):
+        """Regression: charting on `molecule` silently stacked four Nevirapine
+        product-years into one bar and drew their premiums as a sum - 25x, when the
+        true maximum is 7.6x. A price multiple is not additive, so any column used
+        as a chart category has to be unique per row.
+        """
+        premium = products.brand_premium(scms)
+        assert premium["label"].is_unique
+        assert premium["premium_x"].max() < 20, (
+            "a plausible branded premium, not a stacked sum")
+
+    def test_site_prices_are_ranked_cheapest_first(self, scms):
+        sites = products.site_prices(scms, molecule="Nevirapine", dosage="200mg")
+        assert len(sites) > 1
+        assert sites["median_unit_price_usd"].is_monotonic_increasing
+        assert sites["on_time_pct"].between(0, 100).all()
 
 
 # ---------------------------------------------------------------------------
@@ -311,3 +370,67 @@ class TestBusinessTranslation:
         verdict = ab_testing.business_recommendation(z, power=0.99)
         assert verdict["verdict"] == "DO NOT ACT"
         assert not verdict["practical_significance_met"]
+
+
+# ---------------------------------------------------------------------------
+# Chart correctness (not cosmetics)
+# ---------------------------------------------------------------------------
+class TestChartLabels:
+    """Label handling that changes what a chart *says*, not how it looks."""
+
+    def test_shortened_labels_never_collide(self):
+        """Regression: tail truncation merged two different products.
+
+        "Emtricitabine/Tenofovir Disoproxil Fumarate 200/300mg" and the same
+        molecule at "300/200mg" both cut to "Emtricitabine/Tenofovir Dis…". Plotly
+        treated them as one x category, stacked their bars and drew a cumulative
+        line that ran *backwards*. Duplicate categories are a correctness bug.
+        """
+        from src.viz.charts import shorten_labels
+
+        frame = pd.DataFrame({"product": [
+            "Emtricitabine/Tenofovir Disoproxil Fumarate 200/300mg",
+            "Emtricitabine/Tenofovir Disoproxil Fumarate 300/200mg",
+            "Emtricitabine/Tenofovir Disoproxil Fumarate 150/300mg",
+            "Short name",
+        ], "value": [4, 3, 2, 1]})
+        out, shortened = shorten_labels(frame, "product")
+        assert shortened
+        assert out["product"].is_unique, "truncation must not merge categories"
+        # The full text stays available for the tooltip.
+        assert out["product_full"].tolist() == frame["product"].tolist()
+
+    def test_shortening_keeps_the_distinguishing_tail(self):
+        """Dosage lives at the end of a pharmaceutical name, so it must survive."""
+        from src.viz.charts import shorten_labels
+
+        frame = pd.DataFrame({"product": [
+            "Efavirenz/Lamivudine/Tenofovir Disoproxil Fumarate 600/300/300mg",
+        ], "value": [1]})
+        out, _ = shorten_labels(frame, "product")
+        assert out["product"].iloc[0].endswith("300/300mg")
+        assert "…" in out["product"].iloc[0]
+
+    def test_short_labels_are_left_alone(self):
+        from src.viz.charts import shorten_labels
+
+        frame = pd.DataFrame({"x": ["Air", "Ocean", "Truck"], "y": [1, 2, 3]})
+        out, shortened = shorten_labels(frame, "x")
+        assert not shortened
+        assert "x_full" not in out.columns
+
+    def test_concentration_chart_preserves_row_order_and_count(self):
+        """A merged category would silently drop a bar."""
+        from src.analytics import products
+        from src.viz import charts
+
+        ranked = products.value_concentration().head(15)
+        fig = charts.concentration_chart(
+            ranked, "product", "value_usd", "cumulative_share_pct",
+            reference_pct=80)
+        bars = fig.data[0]
+        assert len(bars.x) == len(ranked), "every product must get its own bar"
+        assert len(set(bars.x)) == len(ranked), "and its own category"
+        # The cumulative line must be monotone, as the underlying data is.
+        line = list(fig.data[1].y)
+        assert line == sorted(line), "a non-monotone cumulative line means merged rows"

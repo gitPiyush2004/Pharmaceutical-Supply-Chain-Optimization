@@ -10,7 +10,7 @@ data and knows nothing about pharmaceuticals.
 
 The **comparisons** - which groups get compared, on what metric, and what
 confounds that comparison - live in :mod:`src.analytics.experiments` (supply chain)
-and :mod:`src.analytics.market` (Indian product master). Both read real data.
+and :mod:`src.analytics.products` (procurement pricing). Both read real data.
 
 That split is deliberate. An earlier version of this module carried a catalogue of
 four operational interventions with hard-coded control and treatment rates, and

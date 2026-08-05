@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 import streamlit as st
 
-from src.analytics import market, pipeline, procurement
+from src.analytics import pipeline, procurement, products
 from src.dashboard.components import (callout, chart, insight, kpi_row,
                                       methodology, page_setup, section,
                                       show_table, sidebar_about)
@@ -30,7 +30,7 @@ page_setup(
     title="Pharmaceutical Supply Chain Optimization",
     icon="💊",
     subtitle="Order-to-delivery analytics, statistical testing and machine "
-             "learning on three real pharmaceutical datasets",
+             "learning on two real pharmaceutical datasets",
 )
 
 
@@ -40,8 +40,9 @@ def _metrics() -> dict:
     return {
         "pipeline": pipeline.pipeline_kpis(),
         "scms": procurement.scms_kpis(),
-        "market": market.market_kpis(),
-        "concentration": market.concentration_summary(),
+        "catalogue": products.catalogue_kpis(),
+        "pricing": products.pricing_summary(),
+        "concentration": products.value_concentration(),
     }
 
 
@@ -58,8 +59,9 @@ def _model_scores() -> dict:
 
 
 metrics = _metrics()
-pk, sk, mk = metrics["pipeline"], metrics["scms"], metrics["market"]
-conc = metrics["concentration"]
+pk, sk = metrics["pipeline"], metrics["scms"]
+ck, pricing, conc = (metrics["catalogue"], metrics["pricing"],
+                     metrics["concentration"])
 models = _model_scores()
 
 # ---------------------------------------------------------------------------
@@ -68,24 +70,27 @@ models = _model_scores()
 section("What This Project Does")
 
 st.markdown("""
-Three connected pieces of analytics work, each on a different real dataset:
+Four connected pieces of analytics work on two real datasets:
 
 1. **Order-to-delivery pipeline analysis** on 10,324 genuine USAID shipments —
    where commodity value arrives late, and which part of the pipeline causes it.
-2. **Statistical testing** of the differences that analysis surfaces — including a
+2. **Product catalogue and pricing** on the same rows — what was bought, from which
+   factory, and whether the price paid was consistent.
+3. **Statistical testing** of the differences those two surface — including a
    *bounded* null result, because "we can rule out anything bigger than 1.8 points"
    is a real answer and "not significant" is not.
-3. **Two machine learning pipelines** — clinical drug classification and
+4. **Two machine learning pipelines** — clinical drug classification and
    late-delivery prediction — with leakage control and honest evaluation.
 """)
 
 callout(
     "**Every number on this dashboard is measured from published data.** There is "
-    "no simulation anywhere in this project. The three sources are the Kaggle "
-    "`drug200` clinical dataset (200 patients), the USAID SCMS delivery history "
-    "(10,324 shipments to 43 countries, 2006-2015), and an Indian medicine product "
-    "master (253,973 products, 7,642 manufacturers). Each page names its source and "
-    "states what that source cannot tell you.",
+    "no simulation anywhere in this project. Two sources: the Kaggle `drug200` "
+    "clinical dataset (200 patients) and the USAID SCMS delivery history (10,324 "
+    "shipments to 43 countries, 2006-2015). SCMS carries both the logistics *and* "
+    "the product catalogue — molecule, brand, dosage, factory and the price actually "
+    "paid — so the delivery and pricing questions are answered on the same rows. "
+    "Each page names its source and states what that source cannot tell you.",
     kind="insight", title="Data provenance",
 )
 
@@ -174,22 +179,21 @@ late shipments. Ranking is the deployable output, not the label.
 """)
 with col3:
     st.markdown(f"""
-**A market with no incumbent**
+**The same trap, found twice**
 
-{mk['manufacturers']:,} manufacturers share {mk['products']:,} product listings.
-The largest holds {100 * mk['top_manufacturer_products'] / mk['products']:.1f}%, and
-the top ten hold {conc.loc[0, 'cumulative_share_pct']:.1f}% between them — a
-Herfindahl index of {conc.attrs['hhi']:,.0f}. Sourcing leverage here comes from
-switching supplier, not from negotiating with one.
+Pooled across ten years, identical products show a {pricing['pooled_median_spread_x']:.1f}x
+price spread. Within a single year it is {pricing['within_year_median_spread_x']:.1f}x —
+the rest was a market-wide price collapse. The same pooling mistake as the delivery
+finding, on a completely different question.
 
-*See: Indian Pharma Market*
+*See: Product & Pricing*
 """)
 
 # ---------------------------------------------------------------------------
 section("How To Navigate")
 
 nav = [
-    ("1. Data Quality", "A type-aware audit of all three datasets — and why SCMS "
+    ("1. Data Quality", "A type-aware audit of both datasets — and why SCMS "
                         "scores 99% on completeness while 40% of its freight data "
                         "is unusable"),
     ("2. ML Models", "Drug classification and late-delivery prediction, with "
@@ -198,8 +202,8 @@ nav = [
                              "and milestone traceability"),
     ("4. Vendor & Logistics", "Vendor scorecards, destination performance, "
                               "transport mode and freight economics"),
-    ("5. Indian Pharma Market", "Manufacturer concentration, pricing structure and "
-                                "portfolio breadth across 253,973 products"),
+    ("5. Product & Pricing", "What was bought, from which factory, at what price - "
+                             "and why the pooled price spread is twice the real one"),
     ("6. Statistical Testing", "Real group comparisons, stratification against "
                                "misleading averages, and how to report a null result"),
     ("7. Insights", "Consolidated findings with what each one does and does not "
@@ -211,7 +215,7 @@ show_table(pd.DataFrame(nav, columns=["Page", "What it covers"]), height=340)
 methodology("""
 **Reproducibility.** Everything is deterministic under `project.random_seed` in
 `config/config.yaml`. From a clean checkout, `python scripts/fetch_data.py`
-downloads the two external datasets and `python scripts/train_models.py`
+downloads and caches the SCMS export and `python scripts/train_models.py`
 regenerates every model metric on this dashboard.
 
 **One definition per metric.** The dashboard, the notebook and the CLI scripts all

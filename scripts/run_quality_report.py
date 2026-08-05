@@ -36,7 +36,7 @@ from src.quality import assessment as dq  # noqa: E402
 
 log = get_logger("scripts.run_quality_report")
 
-DATASETS = ["scms", "indian_medicines", "drug200"]
+DATASETS = ["scms", "drug200"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,7 +58,7 @@ def main() -> int:
     targets = [args.dataset] if args.dataset else DATASETS
 
     print(f"\n{cfg.project.name} v{cfg.project.version}")
-    print("Data quality audit - three real datasets, as published\n")
+    print("Data quality audit - both real datasets, as published\n")
 
     scoreboard = dq.assess_all(targets, raw=True)
     print("=" * 96)

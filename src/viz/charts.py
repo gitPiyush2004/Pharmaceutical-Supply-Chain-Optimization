@@ -163,12 +163,20 @@ _AXIS_LABELS: dict[str, str] = {
     "freight_pct_of_value": "Freight as share of value (%)",
     "annual_value_usd": "Estimated annual value (USD)",
     "units_ordered": "Units", "packs_ordered": "Packs",
-    # --- Indian market -----------------------------------------------------
-    "price_inr": "Price (Rs)", "median_price_inr": "Median price (Rs)",
-    "products": "Products listed", "product_share_pct": "Share of listings (%)",
-    "discontinued_pct": "Discontinued (%)", "manufacturer": "Manufacturer",
-    "price_band": "Price band", "pack_form": "Pack form",
-    "ingredient": "Active ingredient", "cumulative_pct": "Cumulative share (%)",
+    # --- product catalogue and pricing -------------------------------------
+    "unit_price_usd": "Unit price (USD)", "pack_price_usd": "Pack price (USD)",
+    "median_price": "Median unit price (USD)", "min_price": "Lowest price paid (USD)",
+    "max_price": "Highest price paid (USD)",
+    "median_unit_price_usd": "Median unit price (USD)",
+    "spread_x": "Price spread (max / min)", "premium_x": "Branded premium (x)",
+    "generic_price": "Generic unit price (USD)",
+    "branded_price": "Branded unit price (USD)",
+    "molecule": "Molecule", "dosage": "Dosage", "dosage_form": "Dosage form",
+    "label": "Product and year",
+    "brand": "Brand", "product": "Product", "manufacturing_site": "Factory",
+    "value_share_pct": "Share of value (%)",
+    "cumulative_share_pct": "Cumulative share of value (%)",
+    "sites": "Factories", "delivery_year": "Delivery year",
     # --- quality and ML ----------------------------------------------------
     "missing_pct": "Missing (%)", "outlier_pct": "Outliers (%)",
     "importance": "Importance", "probability": "Probability",
@@ -192,6 +200,19 @@ def shorten_labels(data: pd.DataFrame, column: str,
     shortens the displayed label and stashes the full text in a
     ``<column>_full`` column so the tooltip can still show it.
 
+    Truncation happens in the **middle**, not at the end, and collisions are then
+    resolved explicitly. Both matter more than they sound:
+
+    * Tail truncation silently merged two different products. "Emtricitabine/Tenofovir
+      Disoproxil Fumarate 200/300mg" and the same molecule at "300/200mg" both cut to
+      "Emtricitabine/Tenofovir Dis…", Plotly treated them as one x category, stacked
+      their bars and drew a cumulative line that went *backwards*. The distinguishing
+      part of a pharmaceutical name is usually the dosage at the end, so keeping the
+      tail fixes the common case.
+    * Middle truncation is not a guarantee, so any labels that still collide get a
+      numeric suffix. A duplicated category is a correctness bug, not a cosmetic one -
+      it changes what the chart says.
+
     Parameters
     ----------
     data
@@ -199,7 +220,7 @@ def shorten_labels(data: pd.DataFrame, column: str,
     column
         Categorical column to shorten.
     limit
-        Maximum displayed characters before an ellipsis is appended.
+        Maximum displayed characters before text is elided.
 
     Returns
     -------
@@ -212,10 +233,31 @@ def shorten_labels(data: pd.DataFrame, column: str,
     if labels.str.len().max() <= limit:
         return data, False
 
+    def _elide(text: str) -> str:
+        if len(text) <= limit:
+            return text
+        # Keep roughly 60% of the budget at the front and the rest at the back, so
+        # the distinguishing tail (a dosage, a unit) survives.
+        head = max(1, int((limit - 1) * 0.6))
+        tail = max(1, limit - 1 - head)
+        return f"{text[:head]}…{text[-tail:]}"
+
+    short = labels.map(_elide)
+
+    # Resolve any remaining collisions between labels whose originals differ.
+    counts: dict[str, int] = {}
+    resolved = []
+    seen_full: dict[str, str] = {}
+    for full, brief in zip(labels, short):
+        if seen_full.get(brief) not in (None, full):
+            counts[brief] = counts.get(brief, 1) + 1
+            brief = f"{brief} ({counts[brief]})"
+        seen_full.setdefault(brief, full)
+        resolved.append(brief)
+
     out = data.copy()
     out[f"{column}_full"] = labels
-    out[column] = labels.where(
-        labels.str.len() <= limit, labels.str.slice(0, limit - 1) + "…")
+    out[column] = resolved
     return out, True
 
 
@@ -322,45 +364,73 @@ def donut_chart(labels: list, values: list, title: str = "",
 
 def concentration_chart(ranked: pd.DataFrame, category: str, value: str,
                         cumulative: str, title: str = "",
-                        height: int = 420, hhi: float | None = None) -> go.Figure:
+                        height: int = 420, reference_pct: float | None = None,
+                        note: str | None = None) -> go.Figure:
     """Ranked bars plus a cumulative-share line, scaled to the data.
 
-    A Pareto chart with a fixed 80% reference line is the conventional tool here
-    and it would be actively misleading on this data: the ten largest Indian
-    manufacturers hold 7.7% of listings between them, so an 80% line would sit far
-    off the top of a flat curve and imply the chart was broken. The cumulative axis
-    is therefore scaled to what the data actually reaches, and the Herfindahl index
-    is annotated so the reader gets the concentration verdict as a number instead of
-    inferring it from a curve.
+    Three layout decisions here exist because the obvious versions collided when the
+    exported PNG was actually looked at:
+
+    * **Category labels are shortened.** Untruncated, an ARV product name like
+      "Efavirenz/Lamivudine/Tenofovir Disoproxil Fumarate 600/300/300mg" rotated at
+      -35 degrees consumed roughly half the figure height and squeezed the bars into
+      the top third. Full names remain on hover.
+    * **The cumulative axis is scaled to what the curve reaches**, not fixed at 100%,
+      and the 80% Pareto reference line is **optional**. A fixed 80% line is the
+      conventional default and it is misleading on a flat distribution, where it sits
+      far above the curve and makes the chart look broken. Pass ``reference_pct=80``
+      only when the curve genuinely gets there - on SCMS product value it reaches 94%
+      by the fifteenth product, so it does.
+    * **The note sits under the title, not inside the plot.** Anchored to the top
+      right of the plot area it overlapped both the secondary axis title and the
+      legend. There is no reliably empty region inside a Pareto chart, so the note
+      goes where nothing else is drawn.
     """
+    ranked, shortened = shorten_labels(ranked, category)
+    hover_name = f"{category}_full" if shortened else category
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Bar(
         x=ranked[category].astype(str), y=ranked[value], name=axis_label(value),
-        marker_color=PALETTE["primary"],
-        hovertemplate="<b>%{x}</b><br>%{y:,.0f}<extra></extra>",
+        marker_color=PALETTE["primary"], customdata=ranked[hover_name],
+        hovertemplate="<b>%{customdata}</b><br>%{y:,.0f}<extra></extra>",
     ), secondary_y=False)
     fig.add_trace(go.Scatter(
         x=ranked[category].astype(str), y=ranked[cumulative], name="Cumulative share",
         mode="lines+markers", line=dict(color=PALETTE["accent"], width=2.5),
-        marker=dict(size=7),
-        hovertemplate="<b>%{x}</b><br>Cumulative: %{y:.2f}%<extra></extra>",
+        marker=dict(size=7), customdata=ranked[hover_name],
+        hovertemplate="<b>%{customdata}</b><br>Cumulative: %{y:.2f}%<extra></extra>",
     ), secondary_y=True)
 
     reached = float(ranked[cumulative].max())
-    if hhi is not None:
-        verdict = ("Highly concentrated" if hhi > 2500
-                   else "Moderately concentrated" if hhi > 1500
-                   else "Fragmented")
-        fig.add_annotation(
-            x=0.99, y=0.97, xref="paper", yref="paper", showarrow=False,
-            align="right", font=dict(size=12, color=PALETTE["neutral"]),
-            text=(f"Herfindahl index <b>{hhi:,.0f}</b> - {verdict}<br>"
-                  f"These {len(ranked)} firms hold {reached:.1f}% of listings"))
+    crossed_at = None
+    if reference_pct is not None and reached >= reference_pct:
+        # No annotation on the line itself. "top left" collided with the primary
+        # y-axis zero tick and "right" collided with the secondary axis title, and
+        # there is no third position that is safe at every height - so the reference
+        # value goes in the subtitle, where it also gets room to say what it means.
+        fig.add_hline(y=reference_pct, line_dash="dash",
+                      line_color=PALETTE["neutral"], secondary_y=True)
+        above = ranked[ranked[cumulative] >= reference_pct]
+        if len(above):
+            crossed_at = int(ranked.index.get_loc(above.index[0])) + 1
+
+    subtitle = note
+    if crossed_at is not None:
+        marker = (f"dashed line = {reference_pct:.0f}% of the total, "
+                  f"reached at item {crossed_at}")
+        subtitle = f"{subtitle}; {marker}" if subtitle else marker
+    if subtitle:
+        # Plain text, no <br> - this renders on one line beneath the title.
+        title = f"{title}<br><sup>{subtitle.replace('<br>', ' · ')}</sup>"
 
     fig.update_yaxes(title_text=axis_label(value), secondary_y=False)
     fig.update_yaxes(title_text="Cumulative share (%)", secondary_y=True,
-                     range=[0, max(reached * 1.35, 1.0)], showgrid=False)
+                     range=[0, max(reached * 1.15, 1.0)], showgrid=False)
     fig.update_xaxes(tickangle=-35)
+    fig.update_layout(margin=dict(b=160, t=90),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                  xanchor="right", x=1))
     return apply_theme(fig, title=title, height=height)
 
 

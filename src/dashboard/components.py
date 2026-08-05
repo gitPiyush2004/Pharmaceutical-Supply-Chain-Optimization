@@ -337,10 +337,10 @@ def sidebar_about() -> None:
 
 *{cfg.project.name}*
 
-**Three real datasets**
+**Two real datasets**
 - `drug200` - Kaggle clinical dataset (200 patients)
-- USAID SCMS - 10,324 real shipments, 43 countries
-- Indian medicine master - 253,973 products
+- USAID SCMS - 10,324 real shipments, 43 countries,
+  and the product catalogue behind them
 
 No simulated data. Deterministic under
 `random_seed={cfg.project.random_seed}`.

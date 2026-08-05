@@ -276,10 +276,14 @@ class TestDataQuality:
         assert uplift.loc["scms", "uplift"] < 0
         assert uplift.loc["scms", "completeness_delta"] < 0
 
-    def test_parsing_indian_medicines_raises_its_score(self):
-        """The opposite case: here parsing genuinely recovers information."""
+    def test_parsing_drug200_changes_nothing(self):
+        """The control. drug200 is published clean, so parsing must be a no-op.
+
+        A non-zero uplift here would mean the pipeline had invented a difference to
+        make itself look useful on a file that needed nothing.
+        """
         uplift = dq.quality_uplift().set_index("dataset")
-        assert uplift.loc["indian_medicines", "uplift"] > 0
+        assert uplift.loc["drug200", "uplift"] == 0
 
     def test_clinical_dataset_is_never_modified(self):
         """drug200 is published clean; the pipeline must leave it untouched."""
@@ -305,17 +309,33 @@ class TestDataQuality:
         # Genuine source errors survive - a handful, not thousands.
         assert parsed_checks["violation_pct"].max() < 1.0
 
-    def test_consistency_returns_empty_when_no_invariant_applies(self,
-                                                                indian_medicines):
-        """A flat catalogue has nothing to cross-check, and says so."""
-        assert len(dq.consistency_report(indian_medicines)) == 0
+    def test_consistency_returns_empty_when_no_invariant_applies(self, clinical):
+        """A flat table with no chronology has nothing to cross-check, and says so."""
+        assert len(dq.consistency_report(clinical)) == 0
 
-    def test_container_columns_do_not_break_profiling(self, indian_medicines):
-        """The parsed ingredient list is a Python list per row, which is unhashable."""
-        assert indian_medicines["ingredients"].map(type).eq(list).any()
-        report = dq.assess_dataset("indian_medicines", raw=False)
-        assert report["duplicates"]["exact_duplicate_rows"] >= 0
-        assert len(report["summary"]) == report["columns"]
+    def test_container_columns_do_not_break_profiling(self):
+        """Profiling relies on hashing, and Python containers are unhashable.
+
+        No current dataset has a list-valued column - the one that did left with the
+        Indian catalogue - but the guard is cheap and the failure it prevents is a
+        `TypeError: unhashable type` several layers down inside pandas. It is applied
+        once at the `assess_dataset` entry point, so it is tested there rather than
+        against each individual report function.
+        """
+        frame = pd.DataFrame({
+            "id": [1, 2, 3],
+            "tags": [["a", "b"], ["a", "b"], ["c"]],
+            "value": [1.0, 2.0, 3.0],
+        })
+        flat = dq._flatten_containers(frame)
+        assert flat["tags"].tolist() == ["a, b", "a, b", "c"]
+        assert frame["tags"].map(type).eq(list).all(), "the input must not be mutated"
+
+        # Every report that hashes must survive the flattened frame.
+        assert len(dq.missing_value_report(flat)) == 3
+        assert len(dq.summary_statistics(flat)) == 3
+        # duplicate_report flattens internally, so it takes the raw frame.
+        assert dq.duplicate_report(frame)["exact_duplicate_rows"] == 0
 
     def test_outliers_are_reported_not_removed(self, scms):
         """Extreme values here are real records, and removing them would delete

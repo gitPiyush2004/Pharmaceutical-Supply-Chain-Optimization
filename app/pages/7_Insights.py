@@ -25,7 +25,7 @@ import streamlit as st
 
 from src.analytics import ab_testing as ab
 from src.analytics import experiments as ex
-from src.analytics import market, pipeline, procurement
+from src.analytics import pipeline, procurement, products
 from src.dashboard.components import (callout, chart, download_button, insight,
                                       kpi_row, methodology, page_setup, section,
                                       show_table, sidebar_about)
@@ -52,8 +52,10 @@ def _evidence() -> dict:
         "countries": procurement.country_performance(),
         "catalogue": ex.comparison_catalogue(),
         "stratified": ex.stratified_comparison(),
-        "market": market.market_kpis(),
-        "ingredients": market.ingredient_analysis(),
+        "product_catalogue": products.catalogue_kpis(),
+        "pricing": products.pricing_summary(),
+        "concentration": products.value_concentration(),
+        "premium": products.brand_premium(),
         "lateness": pipeline.lateness_funnel(),
     }
 
@@ -223,21 +225,33 @@ findings = pd.DataFrame([
         "source": "ML Models",
     },
     {
-        "finding": "Indian generics pricing offers real substitution headroom",
-        "evidence": f"{ev['ingredients'].iloc[0]['ingredient']} is sold under "
-                    f"{ev['ingredients'].iloc[0]['brands']:,} brand names by "
-                    f"{ev['ingredients'].iloc[0]['manufacturers']:,} manufacturers, "
-                    f"with a Rs {ev['ingredients'].iloc[0]['price_spread_inr']:,.0f} "
-                    f"spread between price quartiles on identical composition.",
-        "action": "For formulary buying, tender by molecule rather than by brand. "
-                  "With 7,642 manufacturers the leverage is in switching, not in "
-                  "volume commitments.",
-        "does_not_establish": "That the cheaper products are equivalent in "
-                             "practice. This dataset carries composition and price "
-                             "but nothing on bioequivalence, quality history or "
-                             "supply reliability.",
-        "confidence": "Medium",
-        "source": "Indian Pharma Market",
+        "finding": "Branded product costs ~2x the same molecule bought generically",
+        "evidence": f"Median {ev['pricing']['brand_premium_x']:.1f}x premium across "
+                    f"{ev['pricing']['brand_premium_product_years']} product-years "
+                    f"where both were bought in the same year. Nevirapine 200mg: "
+                    f"$0.05 generic against $0.335 for Viramune in 2009, 6.7x.",
+        "action": "Tender by molecule rather than by brand on the five products that "
+                  "carry 63% of spend. That is where a 2x premium is worth real money.",
+        "does_not_establish": "That the premium is waste. Nothing here records "
+                             "freight terms, volume commitments, urgency or "
+                             "registration status, and on Nevirapine 2009 the "
+                             "expensive supplier delivered 100% on time against 86% "
+                             "for the cheapest.",
+        "confidence": "High",
+        "source": "Product & Pricing",
+    },
+    {
+        "finding": "The pooled price spread is twice the real one",
+        "evidence": f"{ev['pricing']['pooled_median_spread_x']:.1f}x pooled across "
+                    f"2006-2015 against {ev['pricing']['within_year_median_spread_x']:.1f}x "
+                    f"within a single year. Efavirenz 600mg fell "
+                    f"{ev['pricing']['reference_decline_pct']:.0f}% over the decade.",
+        "action": "Stratify every price comparison by year before quoting it — the "
+                  "same fix as the delivery finding above.",
+        "does_not_establish": "Anything new about suppliers. This is a measurement "
+                             "correction, not a finding about who is expensive.",
+        "confidence": "High",
+        "source": "Product & Pricing",
     },
     {
         "finding": "A grade-A data quality score can be worthless",
@@ -300,12 +314,16 @@ Three things this analysis argues **against** doing:
    it as a pass/fail control would be worse than doing nothing, because it would
    carry the authority of a model.
 
-3. **Do not model discontinuation risk on the Indian product master.** The flag
-   varies by 51 percentage points between manufacturers and by 1.1 points across
-   price quartiles. That pattern is catalogue refresh timing in the source, not
-   product economics, and the file has no launch date, sales volume or therapeutic
-   class to model it with. A classifier here would produce a confident risk score for
-   something the data cannot see.
+3. **Do not quote a pooled price spread.** It reads 5.0x and the honest figure is
+   2.5x — the rest is a decade of falling antiretroviral prices, not supplier
+   behaviour. The same applies to the three product groups showing 100% on-time
+   delivery: they have 8 to 22 line items each, so that is noise wearing a
+   percentage sign, and it is why the comparisons enforce a minimum group size.
+
+4. **Do not read the branded premium as pure waste.** It is a measured 2.1x, but on
+   Nevirapine in 2009 the expensive originator delivered 100% on time against 86% for
+   the cheapest generic. The premium buys something. Whether it is worth 6.7x is a
+   procurement judgement, and the data does not settle it.
 """)
 
 # ---------------------------------------------------------------------------

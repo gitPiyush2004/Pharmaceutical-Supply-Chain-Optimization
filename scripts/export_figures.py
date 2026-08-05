@@ -32,6 +32,7 @@ import pandas as pd  # noqa: E402
 
 from src.analytics import experiments as ex  # noqa: E402
 from src.analytics import pipeline as pl  # noqa: E402
+from src.analytics import products as pd_mod  # noqa: E402
 from src.logger import get_logger  # noqa: E402
 from src.ml import predict  # noqa: E402
 from src.viz import charts  # noqa: E402
@@ -61,6 +62,15 @@ def _simpsons_paradox():
         title="Fulfilment Route On-Time Rate Within Each Era", height=440)
 
 
+def _price_pooling_trap():
+    """Why a pooled price spread misleads: the decade-long price collapse."""
+    trend = pd_mod.price_trend(molecule="Efavirenz", dosage="600mg")
+    return charts.line_chart(
+        trend, x="delivery_year", y=["min_price", "median_price", "max_price"],
+        title="Efavirenz 600mg Unit Price by Year - the Median Fell 80%, the Maximum Did Not",
+        y_title="Unit price (USD)", height=440)
+
+
 def _confusion_matrix():
     """Drug classification performance on the held-out test set."""
     meta = predict.model_summary("drug_classification")
@@ -82,6 +92,7 @@ def _late_delivery_gains():
 FIGURES = {
     "value_funnel": _value_funnel,
     "simpsons_paradox": _simpsons_paradox,
+    "price_pooling_trap": _price_pooling_trap,
     "confusion_matrix": _confusion_matrix,
     "late_delivery_gains": _late_delivery_gains,
 }

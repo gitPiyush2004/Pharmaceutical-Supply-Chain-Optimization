@@ -37,7 +37,6 @@ log = get_logger("scripts.fetch_data")
 EXPECTED_ROWS = {
     "drug200": 200,
     "scms": 10_324,
-    "indian_medicines": 253_973,
 }
 
 
@@ -75,7 +74,7 @@ def main() -> int:
 
     if args.force:
         cfg = get_config()
-        for name in ("scms", "indian_medicines"):
+        for name in ("scms",):
             path = resolve_path(cfg.datasets[name])
             if path.exists():
                 log.info("Removing cached %s to force a re-download", path.name)

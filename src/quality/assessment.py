@@ -43,8 +43,7 @@ findings into named remediation actions, because an audit that stops at
 
 A note on honest scoring
 ------------------------
-All three datasets here are real, and they differ enormously in how messy they
-are. ``drug200`` is genuinely spotless, so a near-perfect score on it is the
+Both datasets here are real, and they differ enormously in how messy they are. ``drug200`` is genuinely spotless, so a near-perfect score on it is the
 correct answer rather than a failure of the audit. SCMS is the opposite: it scores
 99.3% on a naive completeness check while 40% of its freight costs are unusable
 text, which is exactly the gap this module exists to expose - see
@@ -61,7 +60,7 @@ Every threshold, weight and grade band is read from ``config/config.yaml``
 Example
 -------
 >>> from src.quality.assessment import assess_all, assess_dataset
->>> assess_all()                      # scoreboard across the three datasets
+>>> assess_all()                      # scoreboard across both datasets
 >>> report = assess_dataset("scms")
 >>> report["score"]["grade"]
 'A'
@@ -113,14 +112,13 @@ _DQ_DEFAULTS: dict[str, Any] = {
 # Severity vocabulary, ordered worst-first for sorting.
 _SEVERITY_ORDER: dict[str, int] = {"High": 0, "Medium": 1, "Low": 2, "None": 3}
 
-# The three real datasets and the business key that must be unique in each.
+# The two real datasets and the business key that must be unique in each.
 # ``None`` means the dataset has no natural key (drug200 is one row per patient
 # observation with no identifier column).
 _DATASET_KEYS: dict[str, list[str] | None] = {
     # All three are real. drug200 has no surrogate key; the other two do.
     "drug200": None,
     "scms": ["ID"],
-    "indian_medicines": ["id"],
 }
 
 
@@ -654,8 +652,8 @@ def summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
         if column in numeric_columns:
             # Booleans count as numeric for profiling (a share of True is a useful
             # statistic) but numpy cannot compute a quantile on a bool dtype, so
-            # cast first. The Indian dataset's `Is_discontinued` arrives as bool
-            # straight from the CSV and hits this path.
+            # cast first. Any boolean column read straight from a CSV hits this
+            # path - SCMS `is_late` is derived as int, but a future source may not be.
             numeric = pd.to_numeric(values, errors="coerce", downcast=None)
             if pd.api.types.is_bool_dtype(numeric):
                 numeric = numeric.astype("int8")
@@ -1298,8 +1296,6 @@ def _load_layer(name: str, raw: bool) -> pd.DataFrame:
 
     * ``scms`` - per-column date formats parsed, and every ambiguous value given a
       reason code that distinguishes structural absence from a genuine gap.
-    * ``indian_medicines`` - price parsed to a number, pack labels parsed into a
-      form and a quantity, composition split into ingredients.
     * ``drug200`` - identical in both layers. It is published clean, and inventing
       a difference to make the comparison look better would defeat the point.
 
@@ -1311,8 +1307,6 @@ def _load_layer(name: str, raw: bool) -> pd.DataFrame:
         return loader.load_table(name).copy()
     if name == "scms":
         return loader.load_scms()
-    if name == "indian_medicines":
-        return loader.load_indian_medicines()
     return loader.load_table(name).copy()
 
 
@@ -1377,7 +1371,7 @@ def assess_all(names: Iterable[str] | None = None, raw: bool = True) -> pd.DataF
     Parameters
     ----------
     names : iterable of str, optional
-        Datasets to assess. Defaults to all three.
+        Datasets to assess. Defaults to both.
     raw : bool, default True
         Score the file as published. Pass ``False`` to score the interpreted
         form; running both is how the dashboard shows what parsing recovers.
@@ -1435,7 +1429,7 @@ def quality_uplift(names: Iterable[str] | None = None) -> pd.DataFrame:
     Parameters
     ----------
     names : iterable of str, optional
-        Datasets to compare. Defaults to all three.
+        Datasets to compare. Defaults to both.
 
     Returns
     -------

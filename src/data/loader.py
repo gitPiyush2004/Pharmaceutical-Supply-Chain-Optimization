@@ -5,13 +5,19 @@ Every consumer - analytics modules, the Streamlit app, notebooks and tests - rea
 data through this module rather than touching CSV paths directly. That keeps parsing
 rules in one place and gives the whole platform a single caching strategy.
 
-The three datasets, all real
+The two datasets, both real
 ---------------------------
-==================  ==========  =====================================================
-``drug200``         200 rows    Kaggle clinical dataset - the drug classification model
-``scms``            10,324      USAID SCMS delivery history - procurement and logistics
-``indian_medicines``253,973     Indian product master - market structure
-==================  ==========  =====================================================
+==============  ==========  =========================================================
+``drug200``     200 rows    Kaggle clinical dataset - the drug classification model
+``scms``        10,324      USAID SCMS delivery history - delivery, vendors, and the
+                            product catalogue and pricing analysis
+==============  ==========  =========================================================
+
+An Indian medicine catalogue (253,973 products) used to sit alongside these. It was
+dropped because SCMS answers the same question better: it carries molecule, brand,
+dosage, form, factory and the price *actually paid*, on the same rows as the delivery
+performance. A separate list-price catalogue for products nobody in the dataset bought
+added scale but no new evidence. See :mod:`src.analytics.products`.
 
 On the absence of a cleaning layer
 ----------------------------------
@@ -26,9 +32,6 @@ cleaning is dataset-specific and inseparable from correctly interpreting the sou
   ambiguous value with a reason code, distinguishing *structurally absent* from
   *genuinely missing*. A generic imputer would have filled in purchase orders that
   never existed.
-* :mod:`src.data.indian_medicines` normalises manufacturer names, parses free-text
-  pack labels and splits composition strings.
-
 ``drug200`` needs none - it is published clean, verified: zero nulls, zero
 duplicates, no out-of-range values.
 
@@ -49,8 +52,8 @@ from src.logger import get_logger
 
 log = get_logger(__name__)
 
-#: The three real datasets, keyed as they appear in ``config.datasets``.
-DATASETS: tuple[str, ...] = ("drug200", "scms", "indian_medicines")
+#: The two real datasets, keyed as they appear in ``config.datasets``.
+DATASETS: tuple[str, ...] = ("drug200", "scms")
 
 
 def _dataset_path(name: str) -> Path:
@@ -64,15 +67,13 @@ def _dataset_path(name: str) -> Path:
 def ensure_datasets() -> None:
     """Fetch any cached dataset that is not present yet.
 
-    ``drug200`` ships with the repository. The other two are downloaded on first
-    use and cached under ``data/external``, so a fresh clone works without a
-    separate build step and later runs need no network.
+    ``drug200`` ships with the repository. SCMS is downloaded on first use and
+    cached under ``data/external``, so a fresh clone works without a separate build
+    step and later runs need no network.
     """
-    from src.data.indian_medicines import download as download_indian
     from src.data.scms import download_scms
 
     download_scms()
-    download_indian()
 
 
 @lru_cache(maxsize=8)
@@ -90,17 +91,13 @@ def load_table(name: str) -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        The source data with no transformation applied. For interpreted versions
-        use :func:`load_scms` or :func:`load_indian_medicines`.
+        The source data with no transformation applied. For the interpreted
+        version use :func:`load_scms`.
     """
     if name == "scms":
         from src.data.scms import download_scms
 
         download_scms()
-    elif name == "indian_medicines":
-        from src.data.indian_medicines import download
-
-        download()
 
     path = _dataset_path(name)
     if not path.exists():
@@ -147,31 +144,15 @@ def load_scms_raw() -> pd.DataFrame:
     return _load_raw().copy()
 
 
-def load_indian_medicines() -> pd.DataFrame:
-    """Indian medicine product master, normalised (253,973 products)."""
-    from src.data.indian_medicines import load_indian_medicines as _load
-
-    return _load().copy()
-
-
-def load_indian_medicines_raw() -> pd.DataFrame:
-    """Indian medicine master exactly as published, for quality profiling."""
-    from src.data.indian_medicines import load_raw
-
-    return load_raw().copy()
-
-
 def load_all() -> dict[str, pd.DataFrame]:
-    """Load all three datasets in their interpreted form."""
+    """Load both datasets in their interpreted form."""
     return {
         "clinical": load_clinical(),
         "scms": load_scms(),
-        "indian_medicines": load_indian_medicines(),
     }
 
 
 __all__ = [
     "DATASETS", "load_table", "load_raw_table", "load_all", "ensure_datasets",
     "load_clinical", "load_scms", "load_scms_raw",
-    "load_indian_medicines", "load_indian_medicines_raw",
 ]

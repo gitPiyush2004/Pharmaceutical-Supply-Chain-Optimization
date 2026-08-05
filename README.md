@@ -2,17 +2,17 @@
 
 ### Delivery pipeline analytics · Statistical testing · Machine learning
 
-An end-to-end analytics platform on **three real pharmaceutical datasets**: where
-$259M of commodity value arrives late across 10,324 actual USAID shipments, which
-of those differences survive a statistical test, and two ML pipelines with honest
-evaluation.
+An end-to-end analytics platform on **two real pharmaceutical datasets**: where
+$259M of commodity value arrives late across 10,324 actual USAID shipments, whether
+the prices paid for identical products were consistent, which of those differences
+survive a statistical test, and two ML pipelines with honest evaluation.
 
 No simulated data anywhere in the project.
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![scikit-learn](https://img.shields.io/badge/scikit--learn-1.3%2B-F7931E)](https://scikit-learn.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.32%2B-FF4B4B)](https://streamlit.io/)
-[![Tests](https://img.shields.io/badge/tests-137%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-141%20passing-brightgreen)](tests/)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/gitPiyush2004/Pharmaceutical-Supply-Chain-Optimization/blob/main/notebooks/drug_classification_pipeline.ipynb)
 
 ---
@@ -24,7 +24,7 @@ git clone https://github.com/gitPiyush2004/Pharmaceutical-Supply-Chain-Optimizat
 cd Pharmaceutical-Supply-Chain-Optimization
 pip install -r requirements.txt
 
-python scripts/fetch_data.py       # download and cache the two external datasets
+python scripts/fetch_data.py       # verify the datasets are present
 python scripts/train_models.py     # train both models
 streamlit run app/Home.py          # launch the dashboard
 ```
@@ -33,16 +33,23 @@ streamlit run app/Home.py          # launch the dashboard
 
 | Dataset | Size | Used for |
 |---|---|---|
-| Kaggle [`drug200`](https://www.kaggle.com/datasets/prathamtripathi/drug-classification) | 200 patients | Drug classification model |
-| [USAID SCMS delivery history](https://www.kaggle.com/datasets/sawandikirby/supply-chain-shipment-pricing-data) | 10,324 shipments, 43 countries, 2006–2015 | Pipeline, vendor, logistics, statistical testing, late-delivery model |
-| [Indian Medicine Dataset](https://github.com/junioralive/Indian-Medicine-Dataset) | 253,973 products, 7,642 manufacturers | Market structure and pricing |
+| Kaggle [`drug200`](https://www.kaggle.com/datasets/prathamtripathi/drug-classification) | 200 patients | Drug recommendation model |
+| [USAID SCMS delivery history](https://www.kaggle.com/datasets/sawandikirby/supply-chain-shipment-pricing-data) | 10,324 shipments, 43 countries, 2006–2015 | Pipeline, vendor, logistics, **product catalogue and pricing**, statistical testing, late-delivery model |
 
-All three are public and need no authentication. `drug200` and the SCMS export are
-tracked in the repository; the 30 MB Indian file is fetched by `scripts/fetch_data.py`
-and cached, so it costs nothing on clone. `python scripts/fetch_data.py --verify`
-reports what is present and checks row counts, so a truncated download fails loudly.
+Both are public and need no authentication, and both are tracked in the repository,
+so a clone works immediately. `python scripts/fetch_data.py --verify` checks row
+counts, so a truncated download fails loudly rather than putting quietly wrong
+numbers on a page.
 
-Every figure in this repository is measured from these three files.
+**SCMS does double duty, which is why there is no third dataset.** It is usually
+described as a logistics file, but every line item also carries the molecule, brand,
+dosage, dosage form, factory and the price actually paid — 184 catalogue items, 86
+molecules, 88 factories. So "did it arrive on time?" and "did we pay a fair price?"
+are answered on the *same rows*. An earlier version used a separate 253,973-row Indian
+medicine catalogue for the pricing work; it was dropped because it carried list prices
+for products nobody in the dataset bought. Scale is not evidence.
+
+Every figure in this repository is measured from these two files.
 
 ---
 
@@ -189,24 +196,51 @@ and is excluded from the affected statistic.
 
 ---
 
-## 5 · Indian pharmaceutical market
+## 5 · Did we pay a consistent price?
 
-7,642 manufacturers share 253,973 product listings. The largest holds **1.2%**, the
-top ten hold **7.7%** between them — a Herfindahl index of **12**, against a
-regulatory concern threshold of 2,500. This market has no incumbent, so sourcing
-leverage comes from the credible ability to switch supplier rather than from volume
-commitments.
+![Efavirenz price by year](docs/images/price_pooling_trap.png)
 
-Cefixime alone is sold under **8,992 brand names by 2,413 manufacturers**, with a
-₹151 spread between price quartiles on identical composition. For a formulary
-buyer, that is the clearest procurement opportunity in the dataset.
+SCMS records the price actually paid per unit, the factory that made it, and the
+molecule, strength and dosage form — so "did we pay the same for the same thing?" is
+answerable. It is also a trap.
 
-**Discontinuation is reported, not modelled** — deliberately. The rate varies by 51
-percentage points between manufacturers but only 1.1 points across price quartiles.
-That pattern is catalogue refresh timing in the source, not product economics, and
-the file has no launch date, sales volume or therapeutic class to model it with. A
-classifier here would produce a confident risk score for something the data cannot
-see.
+| Measure | Result |
+|---|---|
+| Price spread for identical products, **pooled 2006–2015** | **5.0×** across 30 products |
+| Price spread, **within a single year** | **2.5×** across 89 product-years |
+
+The pooled figure is inflated by exactly a factor of two, because antiretroviral
+prices collapsed over the decade — **Efavirenz 600mg fell 80%**, from a median of
+$0.56 in 2006 to $0.11 in 2015. Comparing a 2006 purchase with a 2015 one measures
+*when* you bought, not *who* from.
+
+Look at the top line of that chart, though. The median collapses to $0.11 while the
+**maximum paid stays near $0.52 right through to 2015** — a 5× gap inside a single
+year, on a product where the cheap option was demonstrably available. So correcting
+for the pooling removes an artefact without removing the finding.
+
+**This is the same mistake as the delivery finding above, on a completely different
+question.** Finding the identical trap twice is why every comparison in this project
+is stratified by era before it is quoted.
+
+**And the remaining 2.5× is not noise.** Where both a generic and an
+originator-branded version of the same product were bought in the same year, the
+branded one costs a median of **2.1× more** across 41 product-years. Nevirapine 200mg
+is the clearest case:
+
+| Supplier | Brand | Median unit price | On-time |
+|---|---|---|---|
+| Three Indian factories | Generic | **$0.050** | 86–100% |
+| Boehringer Ingelheim, Greece | Viramune | **$0.335** | 100% |
+
+6.7× for the same molecule at the same strength in the same year — but the expensive
+supplier delivered 100% on time against 86% for the cheapest. **The premium buys
+something.** Whether it is worth 6.7× is a procurement judgement the data does not
+settle; what the data settles is that the choice exists and what each side costs.
+
+Spend is concentrated enough for this to matter: **63% of priced value sits in five
+products, 94% in fifteen** — out of 92. A buyer does not need to renegotiate the
+catalogue, just the top five.
 
 ---
 
@@ -219,7 +253,7 @@ see.
 | **ML Models** | Both models, full evaluation, live prediction |
 | **Delivery Pipeline** | Value funnel, interval decomposition, traceability |
 | **Vendor & Logistics** | Vendor scorecards, destinations, freight economics |
-| **Indian Pharma Market** | Concentration, pricing, portfolio breadth |
+| **Product & Pricing** | Catalogue, spend concentration, price spread, branded premium |
 | **Statistical Testing** | Real comparisons, stratification, bounded null results |
 | **Insights** | Findings with what each does *not* establish |
 | **Google Colab** | The reproducible notebook |
@@ -234,17 +268,17 @@ Plotly · Streamlit · joblib · openpyxl · pytest
 ```
 ├── app/                 # Streamlit dashboard (Home + 8 pages)
 ├── config/config.yaml   # every threshold, in one auditable file
-├── data/                # drug200 (tracked) + external cache (downloaded)
+├── data/                # drug200 + the SCMS export, both tracked
 ├── models/              # serialised pipelines + evaluation metadata
 ├── notebooks/           # the drug classification pipeline
 ├── scripts/             # fetch_data · train_models · run_quality_report · export_figures
 ├── src/
-│   ├── analytics/       # pipeline · procurement · market · experiments · ab_testing
-│   ├── data/            # scms · indian_medicines · loader
+│   ├── analytics/       # pipeline · procurement · products · experiments · ab_testing
+│   ├── data/            # scms · loader
 │   ├── ml/              # preprocess · train · predict
 │   ├── quality/         # 5-dimension data quality scoring
 │   └── viz/             # theme + chart builders
-└── tests/               # 137 tests
+└── tests/               # 141 tests
 ```
 
 ## Limitations
@@ -260,6 +294,12 @@ Plotly · Streamlit · joblib · openpyxl · pytest
   storage telemetry — Kaggle, openFDA, data.gov.in, CDSCO, Mendeley and Zenodo were
   all checked, and the one promising candidate turned out to be a simulation.
   Rather than generate the data, those analyses were dropped.
+- **The pricing analysis covers 82.9% of line items.** The rest carry no usable unit
+  price. Those rows are excluded rather than counted as $0, and the coverage is stated
+  on the page — treating them as free would make every spread ratio infinite.
+- **The branded premium is a measured fact, not an established overpayment.** Freight
+  terms, volume commitments, urgency and registration status are all plausible
+  explanations and none is recorded.
 - **The SCMS data ends in 2015**, and the analysis itself shows the network changed
   materially mid-sample.
 

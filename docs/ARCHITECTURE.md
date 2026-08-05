@@ -14,7 +14,7 @@ a CLI script or the dashboard without change.
 Presentation   app/                     Streamlit pages (Home + 8)
 Visualisation  src/viz/                 theme + chart builders
 Analytics/ML   src/analytics/, src/ml/, src/quality/
-Data           src/data/                scms · indian_medicines · loader
+Data           src/data/                scms · loader
 Foundation     src/config.py, src/logger.py, config/config.yaml
 ```
 
@@ -27,7 +27,7 @@ under pytest, and callable from a future API without a rewrite.
 
 ## Data flow
 
-All three sources are real. There is no generation step.
+Both sources are real. There is no generation step.
 
 ```
 data/raw/drug200.csv ─────────────────────────────┐  (tracked in the repo)
@@ -41,19 +41,10 @@ data/external/SCMS_*.csv ──────────────────�
   │    reason codes: parsed / structural /         │
   │      missing / cross_reference                 │
   └─────────────────────────────────────────────►  │
-                                                   │
-data/external/indian_medicine_data.csv ───────────┤  (downloaded, cached)
-  │  src/data/indian_medicines.py                  │
-  │    price text -> numeric                       │
-  │    free-text pack label -> form + quantity     │
-  │    composition -> ingredient list              │
-  │    drops the constant `type` column            │
-  └─────────────────────────────────────────────►  │
-                                                   │
                        ┌───────────────────────────┘
                        ▼
         src/quality/assessment.py   scores both layers: as published, and interpreted
-        src/analytics/*             pipeline · procurement · market · experiments
+        src/analytics/*             pipeline · procurement · products · experiments
         src/ml/*                    drug_classification · late_delivery
                        │
                        ▼
@@ -64,9 +55,17 @@ data/external/indian_medicine_data.csv ───────────┤  (do
 ```
 
 `src/data/loader.py` is the single entry point. `load_table(name)` returns the file
-exactly as published; `load_scms()` and `load_indian_medicines()` return the
-interpreted form. Results are cached, so a Streamlit session or notebook pays the
-parsing cost once.
+exactly as published; `load_scms()` returns the interpreted form. Results are cached,
+so a Streamlit session or notebook pays the parsing cost once.
+
+**Why there are two datasets and not three.** An Indian medicine catalogue (253,973
+products) used to sit alongside these, driving a market-structure page. It was dropped
+because SCMS answers the same question better: it carries molecule, brand, dosage,
+form, factory and the price *actually paid*, on the same rows as delivery performance,
+so pricing and service can be joined. A separate list-price catalogue for products
+nobody in the dataset bought added row count but no new evidence. The cost of that
+decision is scale - the project dropped from ~264k rows to ~10.5k - and the benefit is
+that both remaining datasets earn their place.
 
 ### Why there is no cleaning layer
 
@@ -95,7 +94,7 @@ back.
 
 | Module | Responsibility |
 |---|---|
-| `config/config.yaml` | Every tunable constant: paths, dataset locations, quality weights, ML grids, SCMS thresholds, statistical decision rules, market thresholds, the one economic assumption, palette. 211 lines, all of it live — a test asserts no dead simulation blocks survive |
+| `config/config.yaml` | Every tunable constant: paths, dataset locations, quality weights, ML grids, SCMS and product-pricing thresholds, statistical decision rules, the one economic assumption, palette. All of it live — a test asserts no dead simulation blocks survive |
 | `src/config.py` | Loads and caches the YAML; wraps it in a dot-accessible `ConfigNode`; resolves repo-relative paths to absolute |
 | `src/logger.py` | One namespaced logger tree (`pharmachain.*`) with coloured console output and a rotating file handler. File logging degrades gracefully on read-only filesystems |
 
@@ -110,15 +109,7 @@ Those are the kind of choices that otherwise get made silently, per chart.
 | Module | Responsibility |
 |---|---|
 | `scms.py` | Loads and parses the USAID SCMS delivery history; classifies every ambiguous value with a reason code; derives delivery, lead-time and freight metrics |
-| `indian_medicines.py` | Fetches and caches the Indian product master; normalises manufacturer names, parses price and pack labels, splits composition |
-| `loader.py` | Cached access to all three datasets, published or interpreted; downloads the two external files on first use |
-
-**On honest normalisation.** `indian_medicines.py` strips corporate suffixes
-(`Ltd`/`Limited`/`Pvt Ltd`) before counting manufacturers, and its docstring records
-that this merges only **6 of 7,648** names. That is deliberately unflattering: the
-fragmentation in this market is real, not an artefact of inconsistent spelling, and
-overstating what the normalisation achieved would have made the headline
-concentration finding look like a data-cleaning victory instead of a market fact.
+| `loader.py` | Cached access to both datasets, published or interpreted; downloads the SCMS export on first use |
 
 ### Analytics layer
 
@@ -126,7 +117,7 @@ concentration finding look like a data-cleaning victory instead of a market fact
 |---|---|
 | `pipeline.py` | Value-based service funnel, cumulative lateness funnel, milestone traceability, headline KPIs |
 | `procurement.py` | Lead-time breakdown, vendor/country/region/mode scorecards, freight economics, delivery trend, delay distribution |
-| `market.py` | Manufacturer concentration and HHI, log-spaced price distribution, discontinuation breakdowns, ingredient and pack-form analysis |
+| `products.py` | Catalogue structure, spend concentration, price spread pooled versus within-year, the generic-versus-branded premium, per-factory prices |
 | `experiments.py` | Real group comparisons, stratified comparison (the guard against a misleading pooled average), continuous comparisons, the comparison catalogue with confounds |
 | `ab_testing.py` | The statistics themselves: z-test, chi-square, Welch, Mann-Whitney, power, minimum detectable effect, decision rules |
 
@@ -241,6 +232,21 @@ The detector is tested in both directions: it must fire on the real case *and* s
 quiet on a synthetic stable-effect fixture. A detector that fires on everything is
 worthless.
 
+### 3b. The same pooling trap, found twice
+
+`experiments.stratified_comparison` was written for delivery performance: a pooled
+11.9-point service gap between fulfilment routes is 1.9 points before 2011 and 20.5
+after. `products.price_spread_within_year` exists because the identical mistake shows
+up on a completely unrelated question — the pooled price spread for identical products
+reads 5.0x, and within a single year it is 2.5x, because antiretroviral prices fell 80%
+over the decade.
+
+Both are reported as a *pair* on their pages, misleading figure beside honest one,
+rather than quietly replacing one with the other. A reader who only sees the corrected
+number learns a fact; a reader who sees both learns the method. A test asserts the
+pooled figure stays larger than the within-year one, so if that ever inverted the
+page's argument would fail loudly rather than silently become wrong.
+
 ### 4. Model selection on cross-validated score, never on the test set
 
 Three algorithms are grid searched under identical stratified 5-fold CV, and the
@@ -324,11 +330,15 @@ improve the accuracy score and delete the finding.
 ### 11. A rule is removed when its premise is wrong, not tuned
 
 The consistency checker briefly asserted that active-ingredient count could not
-exceed pack quantity. It flagged 7,886 Indian products as inconsistent — and every
-one was correct, because a single vial of Augmentin contains two molecules. The rule
-was deleted rather than threshold-tuned, and the Indian dataset now reports **zero**
-cross-field invariants, which is the honest answer for a flat catalogue with no
-derived quantities.
+exceed pack quantity. On the Indian catalogue that was in the project at the time it
+flagged 7,886 products as inconsistent — and every one was correct, because a single
+vial of Augmentin contains two molecules. The rule was deleted rather than
+threshold-tuned, because the premise was wrong rather than the threshold.
+
+The same principle applies to what is *not* checked now: `drug200` reports zero
+cross-field invariants, and that is the honest answer for a flat table with no
+chronology and no derived quantities. An audit that invents a rule so it has something
+to report is worse than one that says there is nothing to check.
 
 Relatedly, consistency checks now require both columns to be comparably typed. The
 raw SCMS date columns are strings, and `"5/3/13" <= "02-Jun-13"` is a lexicographic
@@ -338,15 +348,15 @@ comparison that reported an 82% violation rate out of nothing.
 
 ## Testing strategy
 
-137 tests, ~16 seconds. Structured around invariants rather than implementation
+141 tests, ~6 seconds. Structured around invariants rather than implementation
 details, because the failure mode that matters is a plausible-but-wrong dashboard,
 not a crash.
 
 | Suite | What it protects |
 |---|---|
 | `test_data_layer.py` | Config completeness and normalised weights; **that no simulation config block survives**; published row counts (a truncated download must fail loudly); that loaders return copies; that `drug200` is clean as published and that **its label is a pure function of its features** — the claim the ML page rests on |
-| `test_analytics.py` | Value-funnel monotonicity and reconciliation with raw totals; cumulative lateness ordering; that traceability is deliberately *non*-monotone; HHI fragmentation; log-bucket partitioning; that the manufacturer effect dominates the price effect on discontinuation; **a hand-computed z-test anchor**; χ² = z²; inadequate-expected-count flagging; that the MDE shrinks with sample size while post-hoc power stays low on a true null; both directions of Welch/Mann-Whitney disagreement |
-| `test_ml_and_quality.py` | Preprocessing normalisation and reproducible splits; artefact completeness; accuracy floors; **that late-delivery accuracy stays at or below baseline while AUC and gains hold up**; **that no leaking or high-cardinality feature is in the model**; that parsing *lowers* the SCMS quality score and *raises* the Indian one; that string columns are never compared as ordered; that a list-valued column does not break profiling |
+| `test_analytics.py` | Value-funnel monotonicity and reconciliation with raw totals; cumulative lateness ordering; that traceability is deliberately *non*-monotone; **that the pooled price spread exceeds the within-year one**; that zero prices are excluded rather than counted; spend concentration; the Efavirenz price decline; that the branded premium is like-for-like; **a hand-computed z-test anchor**; χ² = z²; inadequate-expected-count flagging; that the MDE shrinks with sample size while post-hoc power stays low on a true null; both directions of Welch/Mann-Whitney disagreement |
+| `test_ml_and_quality.py` | Preprocessing normalisation and reproducible splits; artefact completeness; accuracy floors; **that late-delivery accuracy stays at or below baseline while AUC and gains hold up**; **that no leaking or high-cardinality feature is in the model**; that parsing *lowers* the SCMS quality score and leaves drug200 untouched; that string columns are never compared as ordered; that a list-valued column does not break profiling |
 | `test_scms_real_data.py` | Published row count and scale; mixed-format date parsing with **regressions for the 478 negative lead times and 1,128 inverted purchase orders**; unit-versus-pack accounting (9.98B units, not 189M); that structural absences stay null and labelled; that reason codes partition every row; the documented 44% PO coverage and 88.5% on-time rate; small-sample exclusion from scorecards |
 | `test_experiments.py` | Group comparisons; **that the interaction detector fires on the real case and stays quiet on a synthetic stable effect**; skewed-metric handling |
 
@@ -381,7 +391,8 @@ The dashboard is separately smoke-tested through Streamlit's `AppTest` harness �
 | A dashboard page | A file in `app/pages/`, composed from `src.dashboard.components` |
 | A chart type | A builder in `src/viz/charts.py` returning a themed `go.Figure` |
 | A README figure | A function in `scripts/export_figures.py` — then **look at the PNG**; the horizontal-bar bug was caught no other way |
-| A dataset | A parser in `src/data/`, an accessor in `loader.py`, an entry in `config.datasets` and `EXPECTED_ROWS` in `scripts/fetch_data.py` |
+| A price threshold | `config.scms.products` — the spread noise floors and table size |
+| A dataset | A parser in `src/data/`, an accessor in `loader.py`, an entry in `config.datasets` and `EXPECTED_ROWS` in `scripts/fetch_data.py`. Consider first whether SCMS already carries the field — it did for the entire pricing analysis |
 
 Most extensions are configuration edits, which is the point of pushing every
 constant into `config.yaml`.

@@ -24,13 +24,12 @@ paths:
   figures: "reports/figures"
   logs: "logs"
 
-# The three datasets, all real and all publicly available. drug200 ships with the
-# repository; the other two are downloaded once and cached, so a fresh clone builds
-# with one command and later runs need no network.
+# Two datasets, both real and both publicly available. drug200 ships with the
+# repository; SCMS is downloaded once and cached, so a fresh clone builds with one
+# command and later runs need no network.
 datasets:
   drug200: "data/raw/drug200.csv"
   scms: "data/external/SCMS_Delivery_History_Dataset.csv"
-  indian_medicines: "data/external/indian_medicine_data.csv"
 
 # -----------------------------------------------------------------------------
 # Data quality scoring - weights must sum to 1.0
@@ -115,6 +114,18 @@ scms:
     - Scheduled for Delivery
     - Delivered to Client
     - Delivery Recorded
+  # Product catalogue and pricing analysis (src/analytics/products.py). SCMS is a
+  # product catalogue as well as a delivery log - 184 items, 86 molecules, 88
+  # factories - so the same file answers "what did we buy, and did we overpay?"
+  products:
+    # A product needs this many line items before its price range is reported. A
+    # product bought three times has a "range" that is really just three numbers.
+    min_shipments_for_spread: 20
+    # And it needs at least this many factories, because a price spread is only
+    # actionable if it maps onto suppliers a buyer could choose between.
+    min_sites_for_spread: 3
+    # Rows in the ranked top-products table.
+    top_n_products: 15
   late_delivery_model:
     target: "is_late"
     test_size: 0.25
@@ -162,18 +173,6 @@ ab_testing:
   # where Mann-Whitney returns p=1.6e-93. The threshold exists so the choice of
   # test is a stated rule rather than a judgement made per chart.
   skew_limit: 2.0
-
-# -----------------------------------------------------------------------------
-# Indian medicine product master
-# -----------------------------------------------------------------------------
-indian_medicines:
-  source_url: "https://raw.githubusercontent.com/junioralive/Indian-Medicine-Dataset/main/DATA/indian_medicine_data.csv"
-  # A manufacturer needs this many listed products before it is ranked, for the
-  # same noise reason as the vendor threshold above: a firm with 2 products and 1
-  # discontinued would otherwise top a 50%-discontinuation table.
-  min_products_for_ranking: 50
-  # Number of price bands used for the discontinuation-by-price breakdown.
-  price_bands: 4
 
 # -----------------------------------------------------------------------------
 # Business assumptions used to convert an analytical result into money

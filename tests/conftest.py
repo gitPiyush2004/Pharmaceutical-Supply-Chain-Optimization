@@ -1,9 +1,9 @@
 """
 Shared pytest fixtures.
 
-Every dataset is loaded once per session. Two of the three are downloaded on first
-use and cached under ``data/external``, so a session-scoped fixture is the
-difference between one download and one per test.
+Both datasets are loaded once per session. SCMS is downloaded on first use and
+cached under ``data/external``, so a session-scoped fixture is the difference between
+one download and one per test.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ def cfg():
 
 @pytest.fixture(scope="session", autouse=True)
 def _datasets_available():
-    """Download and cache the two external datasets before any test runs.
+    """Download and cache the SCMS export before any test runs.
 
-    A no-op once they are on disk, so only the first run needs a network.
+    A no-op once it is on disk, so only the first run needs a network.
     """
     loader.ensure_datasets()
 
@@ -50,18 +50,6 @@ def scms():
 def scms_raw():
     """USAID SCMS delivery history exactly as published."""
     return loader.load_scms_raw()
-
-
-@pytest.fixture(scope="session")
-def indian_medicines():
-    """Indian medicine product master, normalised - 253,973 products."""
-    return loader.load_indian_medicines()
-
-
-@pytest.fixture(scope="session")
-def indian_medicines_raw():
-    """Indian medicine product master exactly as published."""
-    return loader.load_indian_medicines_raw()
 
 
 @pytest.fixture(scope="session")
