@@ -62,11 +62,9 @@ day** — implausibly precise for international freight, and a sign the schedule
 is sometimes back-filled from the actual one. And **27% arrive early**, counted as
 success by the on-time metric though early arrivals carry holding cost.
 
-![Lateness funnel](docs/images/lateness_funnel.png)
-
-The same funnel from the planner's side: tolerate a week of slippage and 89.5% of
-value is safe, at 30 days 97.8%. The exposure sits in a short tail, not spread across
-the network.
+Read from the planner's side, the same funnel says the exposure sits in a short tail
+rather than spread across the network: tolerate a week of slippage and 89.5% of value
+is safe; at 30 days, 97.8%.
 
 ---
 
@@ -112,10 +110,8 @@ skew threshold and states which to quote.
 
 ### Drug classification — 98% accuracy, and why that is not the point
 
-![Confusion matrix](docs/images/confusion_matrix.png)
-
 Decision Tree with balanced class weights, selected on cross-validated macro F1:
-0.988 macro F1, 0.989 AUC.
+0.988 macro F1, 0.989 AUC, one error on the held-out set.
 
 > **The label is a pure function of the features** — verified, with zero exceptions:
 > `Na_to_K >= 15.015` gives DrugY, and below that threshold blood pressure,
