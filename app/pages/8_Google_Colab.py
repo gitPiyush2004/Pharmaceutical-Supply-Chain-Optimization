@@ -151,8 +151,8 @@ cd {GITHUB_REPO}
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python scripts/build_dataset.py     # build the supply chain data layer
-python scripts/train_models.py      # train and persist all three models
+python scripts/fetch_data.py        # download and cache the two external datasets
+python scripts/train_models.py      # train and persist both models
 streamlit run app/Home.py           # launch this dashboard""", language="bash")
 
 callout(
@@ -172,8 +172,14 @@ shows *how it was computed* for someone checking the work.
 in a couple of minutes, most of that the grid search in Section 13.
 
 **Scope.** The notebook is deliberately focused on the drug classification
-pipeline. The supply chain analytics, the real USAID dataset and the A/B testing
-framework live in the dashboard rather than being duplicated here.
+pipeline. Section 15 adds three short demonstrations on the real supply chain data -
+the value funnel, the stratified comparison and the bounded null result - but the
+vendor, logistics and market analysis lives in the dashboard rather than being
+duplicated here.
+
+**Data.** `drug200.csv` is tracked in the repository, so the notebook's core sections
+need no download. Section 15 pulls the USAID SCMS file on first use and caches it, so
+a fresh Colab runtime fetches it once.
 """)
 
 sidebar_about()

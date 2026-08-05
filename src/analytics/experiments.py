@@ -23,8 +23,9 @@ than hide it:
 The confound that matters most
 ------------------------------
 The headline finding - regional distribution centre fulfilment delivers 82.9% on
-time against 94.7% for direct drop, a gap of 11.9 points - is **Simpson's
-paradox**. Stratified by era:
+time against 94.7% for direct drop, a gap of 11.9 points - is **effect
+modification**: the gap is not a stable property of the route, it interacts strongly
+with era. Stratified:
 
 ===============  ============  ============  =========
 Era              Direct Drop   From RDC      Gap
@@ -57,7 +58,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from src.analytics.ab_testing import (chi_square_test, compare_continuous,
                                       two_proportion_z_test)
@@ -68,8 +68,9 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 #: Minimum group size before a comparison is reported. Below this a single late
-#: shipment swings the rate by several points.
-MIN_GROUP_SIZE = 30
+#: shipment swings the rate by several points. Read from
+#: ``config.ab_testing.min_group_size`` so the threshold is stated in one place.
+MIN_GROUP_SIZE: int = int(get_config().ab_testing.min_group_size)
 
 #: Levels excluded by default because they are recording artefacts, not real
 #: categories. See the module docstring.
@@ -165,9 +166,8 @@ def compare_groups(scms: pd.DataFrame | None = None, dimension: str = "fulfil_vi
                 "verdict": f"Fewer than two usable levels of {dimension}."}
 
     usable = _usable(df, dimension, min_size)
-    contingency = pd.crosstab(usable[dimension], usable["is_late"])
-    chi2, p_chi, dof, expected = stats.chi2_contingency(contingency)
-    cramers_v = float(np.sqrt(chi2 / (len(usable) * (min(contingency.shape) - 1))))
+    chi = chi_square_test(usable, group=dimension, outcome="is_late")
+    p_chi = chi["p_value"]
 
     worst, best = rates.iloc[0], rates.iloc[-1]
     pairwise = two_proportion_z_test(
@@ -192,19 +192,7 @@ def compare_groups(scms: pd.DataFrame | None = None, dimension: str = "fulfil_vi
     return {
         "dimension": dimension,
         "rates": rates,
-        "chi_square": {
-            "test": "Chi-Square Test of Independence",
-            "chi2_statistic": round(float(chi2), 4),
-            "p_value": float(p_chi),
-            "degrees_of_freedom": int(dof),
-            "cramers_v": round(cramers_v, 4),
-            "min_expected_count": round(float(expected.min()), 1),
-            # Below 5 the chi-square approximation is unreliable, so say so rather
-            # than quoting a p-value the reader will over-trust.
-            "expected_counts_adequate": bool(expected.min() >= 5),
-            "alpha": alpha,
-            "significant": bool(p_chi < alpha),
-        },
+        "chi_square": chi,
         "pairwise_z": pairwise,
         "levels_tested": int(len(rates)),
         "levels_excluded": excluded,
@@ -218,10 +206,25 @@ def stratified_comparison(scms: pd.DataFrame | None = None,
                           min_size: int = MIN_GROUP_SIZE) -> dict:
     """Re-run a two-group comparison *within* each level of a third variable.
 
-    This is the guard against Simpson's paradox, and on this dataset it is load
+    The guard against a misleading pooled average, and on this dataset it is load
     bearing. The pooled ``fulfil_via`` gap of ~11.9 points is not a stable
     structural difference: it is ~1.9 points before 2011 and ~20.5 points after,
     because the RDC channel degraded rather than having always been weak.
+
+    Two distinct results are reported, and conflating them would be an overstatement:
+
+    ``is_simpsons_paradox``
+        The gap **reverses sign** between strata. This is textbook Simpson's paradox
+        and is the stronger claim. On the real ``fulfil_via`` case it is ``False``
+        - direct drop leads in both eras.
+    ``interaction_detected``
+        The gap *magnitude* varies by more than half the pooled gap, with or without
+        a sign flip. On the real case it is ``True``, by a factor of ten.
+
+    Both make a pooled average misleading in the same way and with the same practical
+    consequence, so the verdict text covers both. They are kept separate because
+    claiming a reversal that did not happen is exactly the kind of overstatement that
+    a reader checking the numbers will catch.
 
     Parameters
     ----------

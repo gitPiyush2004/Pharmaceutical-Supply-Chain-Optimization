@@ -6,7 +6,7 @@ How the platform is put together, and why each decision was made that way.
 
 ## Layering
 
-Six layers, each depending only on the ones below it. No layer reaches upward, so
+Five layers, each depending only on the ones below it. No layer reaches upward, so
 any layer can be tested in isolation and the analytics can be used from a notebook,
 a CLI script or the dashboard without change.
 
@@ -14,7 +14,7 @@ a CLI script or the dashboard without change.
 Presentation   app/                     Streamlit pages (Home + 8)
 Visualisation  src/viz/                 theme + chart builders
 Analytics/ML   src/analytics/, src/ml/, src/quality/
-Data           src/data/                scms (REAL), generator, cleaning, loader, database
+Data           src/data/                scms · indian_medicines · loader
 Foundation     src/config.py, src/logger.py, config/config.yaml
 ```
 
@@ -27,49 +27,65 @@ under pytest, and callable from a future API without a rewrite.
 
 ## Data flow
 
+All three sources are real. There is no generation step.
+
 ```
-data/external/SCMS_*.csv ─────────────────┐   (REAL USAID data, 10,324 shipments)
-  │  src/data/scms.py                      │
-  │    mixed-format date parsing           │
-  │    business-string numeric parsing     │
-  │    reason codes: parsed / structural / │
-  │      missing / cross_reference         │
-  └──────────────────────────────────────► │  consumed by src/analytics/procurement.py
-                                           │  and the late_delivery model
-data/raw/drug200.csv ─────────────────────┤   (real Kaggle data, never modified)
-                                          │
-src/data/generator.py                     │
-  │  seeded, calibrated digital twin       │
-  │  + deliberate defect injection         │
-  ▼                                        │
-data/raw/*.csv  ── BRONZE ────────────────┤
-  │                                        │
-  │  src/data/cleaning.py                  │
-  │    1. whitespace / casing              │
-  │    2. master-data repair               │
-  │    3. category canonicalisation        │
-  │    4. deduplication                    │
-  │    5. range checks → NaN               │
-  │    6. grouped imputation               │
-  ▼                                        │
-in-memory  ── SILVER ─────────────────────┤
-  │                                        │
-  ├─→ src/data/database.py → SQLite star schema
-  │                                        │
-  ├─→ src/quality/assessment.py  (profiles BRONZE, scores both)
-  ├─→ src/analytics/*            (consume SILVER)
-  └─→ src/ml/*                   (consume SILVER + clinical)
-              │
-              ▼
-        models/*.joblib + *_metadata.json
-              │
-              ▼
-        app/ (reads artefacts, never trains)
+data/raw/drug200.csv ─────────────────────────────┐  (tracked in the repo)
+  no parsing needed - published clean             │
+                                                   │
+data/external/SCMS_*.csv ─────────────────────────┤  (downloaded, cached)
+  │  src/data/scms.py                              │
+  │    per-column date formats (%m/%d/%y vs        │
+  │      %d-%b-%y - one rule for both is wrong)    │
+  │    business-string numeric parsing             │
+  │    reason codes: parsed / structural /         │
+  │      missing / cross_reference                 │
+  └─────────────────────────────────────────────►  │
+                                                   │
+data/external/indian_medicine_data.csv ───────────┤  (downloaded, cached)
+  │  src/data/indian_medicines.py                  │
+  │    price text -> numeric                       │
+  │    free-text pack label -> form + quantity     │
+  │    composition -> ingredient list              │
+  │    drops the constant `type` column            │
+  └─────────────────────────────────────────────►  │
+                                                   │
+                       ┌───────────────────────────┘
+                       ▼
+        src/quality/assessment.py   scores both layers: as published, and interpreted
+        src/analytics/*             pipeline · procurement · market · experiments
+        src/ml/*                    drug_classification · late_delivery
+                       │
+                       ▼
+              models/*.joblib + *_metadata.json
+                       │
+                       ▼
+              app/ (reads artefacts, never trains)
 ```
 
-`src/data/loader.py` is the single entry point. `load_table(name)` returns the silver
-layer; `load_table(name, raw=True)` returns bronze. Results are cached per
-`(name, raw)` pair, so a Streamlit session or notebook pays the cleaning cost once.
+`src/data/loader.py` is the single entry point. `load_table(name)` returns the file
+exactly as published; `load_scms()` and `load_indian_medicines()` return the
+interpreted form. Results are cached, so a Streamlit session or notebook pays the
+parsing cost once.
+
+### Why there is no cleaning layer
+
+An earlier version routed every table through a generic `clean_table` step that
+imputed and canonicalised on the way through. It existed to service a simulated
+extract with deliberately injected defects, and it went with it. Two reasons it was
+not kept for the real data:
+
+1. **It would have caused damage.** Step 6 mode-imputed *every* object column, for
+   any table. On SCMS that means filling `N/A - From RDC` with the modal INCO term —
+   fabricating 5,404 purchase orders that never existed.
+2. **The real cleaning is dataset-specific and inseparable from interpreting the
+   source.** Knowing that `%m/%d/%y` applies to two columns and `%d-%b-%y` to three
+   is not a generic operation; it is knowledge about this file.
+
+So each dataset that needs interpreting owns it. `drug200` needs none — verified
+zero nulls, zero duplicates, no out-of-range values. The consequence is that there
+is no longer a hidden transformation between the file on disk and the frame you get
+back.
 
 ---
 
@@ -79,56 +95,51 @@ layer; `load_table(name, raw=True)` returns bronze. Results are cached per
 
 | Module | Responsibility |
 |---|---|
-| `config/config.yaml` | Every tunable constant: paths, generation parameters, funnel definition, quality weights, ML grids, inventory thresholds, forecasting settings, stability constants, A/B experiments, simulation elasticities, economics, palette |
+| `config/config.yaml` | Every tunable constant: paths, dataset locations, quality weights, ML grids, SCMS thresholds, statistical decision rules, market thresholds, the one economic assumption, palette. 211 lines, all of it live — a test asserts no dead simulation blocks survive |
 | `src/config.py` | Loads and caches the YAML; wraps it in a dot-accessible `ConfigNode`; resolves repo-relative paths to absolute |
 | `src/logger.py` | One namespaced logger tree (`pharmachain.*`) with coloured console output and a rotating file handler. File logging degrades gracefully on read-only filesystems |
 
-**Why a config file rather than constants.** A reviewer can audit every assumption in
-one place, and sensitivity testing becomes a config edit rather than a code change.
-The funnel stage list itself lives here, so adding a ninth stage is a config change
-plus data, not a refactor.
+**Why a config file rather than constants.** A reviewer can audit every assumption
+in one place. It matters most for the two thresholds that decide how a *statistic*
+is reported: `ab_testing.skew_limit` (above which a rank test replaces a mean test)
+and `ab_testing.min_group_size` (below which a comparison is not reported at all).
+Those are the kind of choices that otherwise get made silently, per chart.
 
 ### Data layer
 
 | Module | Responsibility |
 |---|---|
-| `scms.py` | **Real data.** Loads and parses the USAID SCMS delivery history; classifies every ambiguous value with a reason code; derives delivery, lead-time and freight metrics |
-| `generator.py` | Builds the digital twin: three dimensions, four facts. Encodes four structural signals. Injects realistic defects and logs what it injected |
-| `cleaning.py` | Promotes bronze to silver in six ordered steps; returns a remediation log |
-| `loader.py` | Cached access to any table in either layer; auto-generates data if missing |
-| `database.py` | Materialises the CSVs into SQLite with indexes; holds eight named analytical queries |
+| `scms.py` | Loads and parses the USAID SCMS delivery history; classifies every ambiguous value with a reason code; derives delivery, lead-time and freight metrics |
+| `indian_medicines.py` | Fetches and caches the Indian product master; normalises manufacturer names, parses price and pack labels, splits composition |
+| `loader.py` | Cached access to all three datasets, published or interpreted; downloads the two external files on first use |
 
-**Why generate the supply chain data.** No public dataset carries batch-level funnel
-telemetry — per-stage timestamps, per-stage yields, storage conditions and shipment
-legs on one key. The choice was between stitching incomplete extracts together and
-pretending the joins were sound, or shipping a documented, calibrated, reproducible
-generator. The generator also makes the analytics *verifiable*: because ground truth
-is known, tests can assert the analysis recovers the planted signals.
-
-**Why inject defects.** A quality module that finds nothing proves nothing, and an ML
-pipeline advertising "missing value imputation" over complete data is hollow. Real
-pharmaceutical extracts have IoT dropouts, ERP double-postings and free-text region
-fields, so the bronze layer reproduces them — and the generator records exactly what
-it injected, giving a ground-truth test of the profiler.
+**On honest normalisation.** `indian_medicines.py` strips corporate suffixes
+(`Ltd`/`Limited`/`Pvt Ltd`) before counting manufacturers, and its docstring records
+that this merges only **6 of 7,648** names. That is deliberately unflattering: the
+fragmentation in this market is real, not an artefact of inconsistent spelling, and
+overstating what the normalisation achieved would have made the headline
+concentration finding look like a data-cleaning victory instead of a market fact.
 
 ### Analytics layer
 
 | Module | Key outputs |
 |---|---|
-| `procurement.py` | **Real data.** Procurement milestone coverage, lead-time breakdown, vendor/country/region/mode scorecards, freight economics, delivery trend |
-| `funnel.py` | Stage conversion, drop-off, dwell time, bottleneck ranking with severity scoring, loss attribution, QA root causes, quarterly trend |
-| `stability.py` | Binned condition effects, OLS degradation model, shelf-life estimation, excursion significance test |
-| `ab_testing.py` | Experiment simulation, two-proportion z-test, chi-square, Welch t-test, power analysis, segments, costed recommendation |
+| `pipeline.py` | Value-based service funnel, cumulative lateness funnel, milestone traceability, headline KPIs |
+| `procurement.py` | Lead-time breakdown, vendor/country/region/mode scorecards, freight economics, delivery trend, delay distribution |
+| `market.py` | Manufacturer concentration and HHI, log-spaced price distribution, discontinuation breakdowns, ingredient and pack-form analysis |
+| `experiments.py` | Real group comparisons, stratified comparison (the guard against a misleading pooled average), continuous comparisons, the comparison catalogue with confounds |
+| `ab_testing.py` | The statistics themselves: z-test, chi-square, Welch, Mann-Whitney, power, minimum detectable effect, decision rules |
 
-**On scope.** Earlier revisions also carried inventory, shipment, forecasting and
-scenario-simulation modules. They worked, but they diluted the story: four extra
-dashboard pages that no resume claim or headline finding depended on. They were
-removed rather than left in as dead weight - a smaller platform that a reviewer can
-hold in their head beats a larger one they skim.
+**Why `experiments.py` and `ab_testing.py` are separate.** `ab_testing.py` is a pure
+statistics library — it takes counts or Series, reads no data, and knows nothing
+about pharmaceuticals. `experiments.py` decides *which* groups to compare, on what
+metric, and what confounds the comparison. That split makes the statistics unit
+testable against hand-computed values, and it keeps the domain judgement (which
+comparison is worth making, and what limits it) in one reviewable place.
 
-**Uniform contract.** Every public function takes an optional pre-loaded DataFrame as
-its first argument, defaulting to `None` → load from `loader`. That single convention
-is what lets the dashboard apply sidebar filters and pass the filtered frame straight
+**Uniform contract.** Every public function takes an optional pre-loaded DataFrame
+as its first argument, defaulting to `None` → load from `loader`. That convention is
+what lets the dashboard apply sidebar filters and pass the filtered frame straight
 through, with no duplicate filtering logic in the analytics layer.
 
 ### ML layer
@@ -136,11 +147,11 @@ through, with no duplicate filtering logic in the analytics layer.
 | Module | Responsibility |
 |---|---|
 | `preprocess.py` | Cleaning, categorical normalisation, feature engineering, column groups, `ColumnTransformer` construction, stratified splitting |
-| `train.py` | Grid search across three algorithms under stratified CV for each of the three models, evaluation (confusion matrix, ROC/PR, per-class report), feature importance, artefact persistence |
-| `predict.py` | Loads artefacts, validates input, returns prediction + probabilities + a human-readable explanation |
+| `train.py` | Grid search across three algorithms under stratified CV for each model, evaluation (confusion matrix, ROC/PR, per-class report), feature importance, artefact persistence |
+| `predict.py` | Loads artefacts, validates input, returns prediction + probabilities + a human-readable explanation; plus the late-delivery gains curve |
 
-**One pipeline object.** Imputation, encoding, scaling and the estimator live inside a
-single sklearn `Pipeline`. The serialised `.joblib` therefore needs no separate
+**One pipeline object.** Imputation, encoding, scaling and the estimator live inside
+a single sklearn `Pipeline`. The serialised `.joblib` therefore needs no separate
 transformer at serving time, which makes train/serve skew structurally impossible
 rather than merely unlikely.
 
@@ -155,15 +166,16 @@ and never retrains in the browser.
 | Module | Responsibility |
 |---|---|
 | `viz/theme.py` | Palette from config, registered Plotly template, number formatters, semantic colour lookups |
-| `viz/charts.py` | 28 chart builders, each taking a DataFrame and returning a themed `go.Figure` |
+| `viz/charts.py` | 15 chart builders, each taking a DataFrame and returning a themed `go.Figure` |
 | `dashboard/components.py` | `page_setup`, `section`, `kpi_row`, `callout`/`insight`, `show_table`, `chart`, `sidebar_filters`, `methodology` |
 | `app/Home.py` + `app/pages/` | Page composition and narrative only |
 
-**Why components live in `src/dashboard/` rather than `app/`.** Streamlit puts the main
-script's directory on `sys.path`, so `import components` works under `streamlit run`
-but fails under pytest and Streamlit's `AppTest` harness. Moving the toolkit into the
-source tree means pages import it as `src.dashboard.components` and run identically
-under all three — which is what makes the 12-page smoke test possible.
+**Why components live in `src/dashboard/` rather than `app/`.** Streamlit puts the
+main script's directory on `sys.path`, so `import components` works under
+`streamlit run` but fails under pytest and Streamlit's `AppTest` harness. Moving the
+toolkit into the source tree means pages import it as `src.dashboard.components` and
+run identically under all three — which is what makes the 9-page smoke test
+possible.
 
 **Every page carries a `methodology()` panel.** A reviewer should always be able to
 check the definition behind a metric without leaving the dashboard.
@@ -172,115 +184,187 @@ check the definition behind a metric without leaving the dashboard.
 
 ## Key design decisions
 
-### 1. Bronze/silver separation instead of cleaning in place
+### 1. Structural absence is not missing data
 
-*Alternative considered:* generate clean data and skip the cleaning layer entirely.
+The most consequential decision in the project. `N/A - From RDC` appears in the
+purchase-order date column on 5,404 of 10,324 line items. It is not a gap: it
+correctly records that no vendor purchase order existed, because those goods were
+drawn from regional distribution centre stock.
 
-*Why rejected:* it would make the data quality module decorative and the imputation
-claims hollow. Separating layers also means the quality audit profiles what
-*arrived* — auditing only the cleaned table scores the cleaning code, not the data.
-
-### 2. Grouped imputation, and master-data repair where possible
-
-A missing cold-chain temperature imputed with the portfolio median (~25 °C) would
-fabricate a 20 °C excursion, which then propagates into the stability model, the risk
-labels and every downstream conclusion. So imputation happens within group:
-temperature by product, humidity by region, transit time by transport mode.
-
-`supplier_reliability` is treated differently again. It is an attribute of the
-supplier, not the batch, so the true value is *knowable* and is restored by lookup
-from the dimension table. Preferring repair over imputation wherever the value is
-recoverable is the general principle. Tests assert both behaviours.
-
-### 2b. Structural absence is not missing data
-
-The single most consequential decision in the real-data layer. `N/A - From RDC`
-appears in the purchase-order date column on 5,404 of 10,324 line items. It is not a
-gap: it correctly records that no vendor purchase order existed, because those goods
-were drawn from regional distribution centre stock.
-
-Imputing it would fabricate 5,404 purchase orders and corrupt every lead-time
-statistic downstream. So `src/data/scms.py` attaches a reason code to every value it
-cannot parse — `structural`, `missing`, `cross_reference` or `unparseable` — and the
-analytics exclude structural absences rather than filling them. Every function that
-reports a lead time also reports the denominator it used.
+So `src/data/scms.py` attaches a reason code to every value it cannot parse —
+`structural`, `missing`, `cross_reference` or `unparseable` — and the analytics
+exclude structural absences rather than filling them. Every function that reports a
+lead time also reports the denominator it used.
 
 The same logic applies to `Freight Included in Commodity Cost` (a real cost recorded
-elsewhere, not a zero) and `See DN-304 (ID#:10589)` (a pointer to another row).
+elsewhere, not a zero) and `See DN-304 (ID#:10589)` (a pointer to another row, whose
+embedded ID makes the value *recoverable* rather than lost).
 
-A related finding worth stating: a generic completeness check scores this file 99.3%
-complete and grade A, because all of these are non-null strings in text columns.
-Type-aware parsing shows 55% of purchase-order dates and 40% of freight costs are
-unusable. Profiling types is not the same as profiling meaning.
+**The corollary, which is the more interesting half.** A generic completeness check
+scores this file 99.3% complete and grade A, because all of these are non-null
+strings. Type-aware parsing shows 55% of purchase-order dates and 40% of freight
+costs are unusable. And parsing correctly *lowers* the generic score by 1.70 points,
+because honest nulls score worse than non-null garbage. A test asserts that negative
+sign: if the uplift ever turned positive, it would mean parsing had started imputing.
 
-### 3. Model selection on cross-validated score, never on the test set
+### 2. No unit funnel, because the data cannot support one
+
+SCMS states `Line Item Quantity` once at order time and never restates it at
+delivery. There is no ordered-versus-received pair, no scrap quantity and no
+per-stage weight — and every line item in the file was ultimately delivered. A
+unit-attrition funnel would have been fabricated.
+
+`pipeline.py` measures attrition in *timeliness* instead: a value funnel where each
+band is a strict subset of the one above it, plus a cumulative lateness funnel that
+is monotone by construction. Milestone coverage is drawn as a **stacked bar, not a
+funnel**, because its coverage runs 74% → 44% → 100% and a funnel shape would imply
+sequential loss where a fulfilment route simply has no vendor order to record.
+
+Two tests guard this: one asserts the value funnel is monotone, another asserts the
+traceability series is *not* — so if the data ever changed, the chart choice would be
+revisited rather than silently becoming misleading.
+
+### 3. Stratify before reporting a group difference
+
+The pooled fulfilment-route gap is +11.9 points. Stratified by era it is +1.9 points
+before 2011 and +20.5 after. Those imply opposite actions — replace the channel
+versus investigate what changed in 2011 — so `experiments.stratified_comparison`
+runs as a matter of course rather than as a special check.
+
+**Name it precisely.** The code separates `is_simpsons_paradox` (requires the gap to
+reverse sign) from `interaction_detected` (a gap range exceeding half the pooled gap).
+The real `fulfil_via` case trips the second, not the first — direct drop leads in both
+eras. Both make a pooled average misleading, and conflating them would be an
+overstatement the dashboard would then be repeating everywhere.
+
+The detector is tested in both directions: it must fire on the real case *and* stay
+quiet on a synthetic stable-effect fixture. A detector that fires on everything is
+worthless.
+
+### 4. Model selection on cross-validated score, never on the test set
 
 Three algorithms are grid searched under identical stratified 5-fold CV, and the
-winner is chosen on CV macro F1. On the clinical model random forest edges out the
+winner is chosen on CV macro F1. On the clinical model, random forest edges out the
 decision tree on the test split while the decision tree wins on CV — the decision
 tree ships, and the dashboard explains why. Selecting whichever model wins on the
 test set is how leakage enters a pipeline and inflates every number quoted
 afterwards.
 
 Macro F1 rather than accuracy, because the classes are imbalanced and every class
-matters equally.
+matters equally. Both models use the same metric, which is what makes their numbers
+comparable.
 
-### 4. Three bars before an intervention justifies capital
+### 5. Leakage control is asserted, not assumed
 
-Statistical significance, adequate power, and practical significance. A large sample
-makes almost any difference significant; that alone is never a reason to spend money.
-Power is reported so an inconclusive result can be read correctly as *under-powered*
-rather than as evidence of no effect.
+For the late-delivery model, every lead-time measure except the *scheduled* one is
+derived from the delivery date and would leak the target. Vendor identity and
+manufacturing site are excluded too: with 73 vendors, several appearing a handful of
+times, the model would memorise suppliers rather than learn transferable structure —
+and it could not score a vendor it had never seen.
 
-Chi-square is cross-checked against the z-test (χ² ≈ z² for a 2×2 table) — two
-independent routes to the same question, which catches implementation errors.
+A test reads the persisted feature list and fails if any of those columns appear.
+Documenting leakage control in prose is not the same as enforcing it.
 
-### 5. Forecast method chosen by backtest, with bias reported separately
+### 6. Ranking, not classification, when the classes are imbalanced
 
-A naive moving average is included deliberately: a sophisticated method that cannot
-beat it is not earning its complexity. Bias is reported alongside MAPE because MAPE
-treats over- and under-forecasting symmetrically and a supply chain does not —
-persistent over-forecasting becomes expiry write-off, under-forecasting becomes
-stock-out.
+The late-delivery model's accuracy (0.881) sits *below* the majority-class baseline
+(0.885), because only 11.5% of shipments are late. Reported as a classifier it looks
+worse than a constant prediction.
 
-### 6. Outliers flagged, never silently dropped
+The deployable output is the ranking: reviewing the top 20% by predicted risk catches
+63.3% of late deliveries, a 3.2× lift. A test pins both facts — that accuracy stays
+at or below baseline, and that the gains curve beats random — so nobody later
+"improves" the model by optimising the wrong metric.
 
-In stability analytics an extreme storage temperature is the signal, not noise. The
-cleaning layer only nulls values that are *physically impossible* (a negative
-duration, potency above label claim), never values that are merely extreme. A test
-asserts that genuine excursions survive cleaning.
+### 7. Test selection for continuous metrics follows a written rule
 
-### 7. Elasticity simulation rather than discrete-event
+Freight as a share of value has a mean of 2,548% against a median of 10.6%. Compared
+across product group, Welch returns p = 0.44 and Mann-Whitney p = 6.0e-10 on the same
+data. `compare_continuous` runs both, measures skew against
+`config.ab_testing.skew_limit`, and states which to quote.
 
-The simulator starts from the *measured* baseline and applies configured elasticities.
-It is a first-order model for exploring directional trade-offs in a planning
-conversation — fast enough to be interactive, and stated as such rather than
-presented as a queueing simulation.
+The subtlety worth knowing: the disagreement runs in **both** directions. When only
+the rank test is significant, outliers have masked a real difference and Welch is
+wrong. When only Welch is significant — as with delivery delay by era, where both
+medians are exactly 0 because 61% of deliveries land on their scheduled day —
+*neither* is wrong: the mean moved and the typical case did not. The module returns
+`"both"` and says the effect lives in the tail.
+
+### 8. Null results are judged on the minimum detectable effect, never post-hoc power
+
+Post-hoc power is computed at the *observed* effect size, so it is a deterministic
+function of the p-value: a genuine null mechanically returns low power however large
+the sample. Using it to judge a null is circular reasoning dressed as a statistic.
+
+`minimum_detectable_effect` asks the right question instead — given these sample
+sizes, how large a gap *would* have shown up? On the first-line-designation
+comparison the answer is 1.82 points, so the null rules out anything larger than
+that. Since the practical threshold at that baseline is 1.33 points, the verdict is
+`NO EFFECT (BOUNDED)` rather than a flat "no difference". Three distinct null
+verdicts, because collapsing them loses the useful part.
+
+### 9. Three bars before a difference justifies action
+
+Statistical significance, adequate sensitivity, and practical significance. A large
+sample makes almost any difference significant; that alone is never a reason to spend
+money. A test asserts that a real-but-trivial 0.2-point gap on 500,000 rows returns
+`DO NOT ACT`.
+
+Chi-square is cross-checked against the z-test (χ² = z² for a 2×2 table) — two
+independent routes to the same question, which catches contingency-table errors. This
+only holds with Yates' correction disabled, so a test guards that setting too.
+
+### 10. Outliers flagged, never silently dropped
+
+The largest values in this data are real. A freight ratio of 13,449,400% is a genuine
+record — a tiny line value against a real shipping cost — and it is precisely why the
+statistical tests use medians and rank-based tests on freight. Removing it would
+improve the accuracy score and delete the finding.
+
+### 11. A rule is removed when its premise is wrong, not tuned
+
+The consistency checker briefly asserted that active-ingredient count could not
+exceed pack quantity. It flagged 7,886 Indian products as inconsistent — and every
+one was correct, because a single vial of Augmentin contains two molecules. The rule
+was deleted rather than threshold-tuned, and the Indian dataset now reports **zero**
+cross-field invariants, which is the honest answer for a flat catalogue with no
+derived quantities.
+
+Relatedly, consistency checks now require both columns to be comparably typed. The
+raw SCMS date columns are strings, and `"5/3/13" <= "02-Jun-13"` is a lexicographic
+comparison that reported an 82% violation rate out of nothing.
 
 ---
 
 ## Testing strategy
 
-104 tests, ~9 seconds. Structured around invariants rather than implementation
-details, because the failure mode that matters is a plausible-but-wrong dashboard.
+137 tests, ~16 seconds. Structured around invariants rather than implementation
+details, because the failure mode that matters is a plausible-but-wrong dashboard,
+not a crash.
 
 | Suite | What it protects |
 |---|---|
-| `test_data_layer.py` | Config completeness and normalised weights; **generation determinism** (byte-identical under the same seed); funnel volume monotonicity; stage date ordering; calibration bounds; the four planted structural signals; that bronze really is dirty and silver really is clean; grouped-imputation semantics; cleaning idempotence |
-| `test_analytics.py` | Conversion reconciling with raw units; drop-off complementing conversion; shares summing to 100; ABC thresholds; turnover/days-of-inventory reciprocity; forecasts landing in the future; decomposition reconstructing the series; **a hand-computed z-test anchor**; χ² ≈ z²; power rising with sample size; simulation directionality |
-| `test_ml_and_quality.py` | Preprocessing normalisation and reproducible splits; artefact completeness; accuracy floors; **batch risk beating the majority-class baseline**; confusion-matrix totals matching test rows; importances summing to 1; known clinical rules reproduced from real drug200 rows; input validation; that the profiler finds the injected defects; that cleaning improves every table; that `drug200.csv` is never modified |
-| `test_scms_real_data.py` | **Real data.** Published row count and scale; that cleaning never drops a shipment; mixed-format date parsing; that structural absences stay null and labelled; that reason codes partition every row; that parsed numerics are plain float64; the documented 44% PO coverage and 88.5% on-time rate; small-sample exclusion from scorecards; the RDC-is-worst and ocean-vs-air findings; **that the late-delivery model uses no leaking feature and no high-cardinality identifier**; that its gains curve is monotonic and beats random |
+| `test_data_layer.py` | Config completeness and normalised weights; **that no simulation config block survives**; published row counts (a truncated download must fail loudly); that loaders return copies; that `drug200` is clean as published and that **its label is a pure function of its features** — the claim the ML page rests on |
+| `test_analytics.py` | Value-funnel monotonicity and reconciliation with raw totals; cumulative lateness ordering; that traceability is deliberately *non*-monotone; HHI fragmentation; log-bucket partitioning; that the manufacturer effect dominates the price effect on discontinuation; **a hand-computed z-test anchor**; χ² = z²; inadequate-expected-count flagging; that the MDE shrinks with sample size while post-hoc power stays low on a true null; both directions of Welch/Mann-Whitney disagreement |
+| `test_ml_and_quality.py` | Preprocessing normalisation and reproducible splits; artefact completeness; accuracy floors; **that late-delivery accuracy stays at or below baseline while AUC and gains hold up**; **that no leaking or high-cardinality feature is in the model**; that parsing *lowers* the SCMS quality score and *raises* the Indian one; that string columns are never compared as ordered; that a list-valued column does not break profiling |
+| `test_scms_real_data.py` | Published row count and scale; mixed-format date parsing with **regressions for the 478 negative lead times and 1,128 inverted purchase orders**; unit-versus-pack accounting (9.98B units, not 189M); that structural absences stay null and labelled; that reason codes partition every row; the documented 44% PO coverage and 88.5% on-time rate; small-sample exclusion from scorecards |
+| `test_experiments.py` | Group comparisons; **that the interaction detector fires on the real case and stays quiet on a synthetic stable effect**; skewed-metric handling |
 
-Two testing choices worth naming:
+Three testing choices worth naming:
 
-- **Determinism is tested directly.** The reproducibility claim in the README is only
-  credible if something enforces it.
-- **The planted signals are asserted.** `test_quality_testing_is_flagged_as_bottleneck`
-  and `test_weakest_region_is_middle_east_africa` fail if generator calibration drifts,
-  which is exactly when the documented findings would silently stop being true.
+- **Several tests assert a number is *bad*.** The SCMS quality score must go *down*
+  after parsing; the late-delivery model's accuracy must stay *below* baseline. A
+  suite that only ever demanded higher numbers would have blessed exactly the
+  behaviour this project argues against.
+- **Row counts are pinned.** Two of the three datasets are downloaded at runtime. A
+  partial CSV would otherwise pass every other test while putting quietly wrong
+  numbers on every page.
+- **Regression tests name their bug.** The date-parsing and unit-accounting tests
+  cite the wrong figures they replaced, so the next person to touch that code knows
+  what breaking it looks like.
 
 The dashboard is separately smoke-tested through Streamlit's `AppTest` harness — all
-12 pages must render without exception.
+9 pages must render without exception.
 
 ---
 
@@ -288,15 +372,16 @@ The dashboard is separately smoke-tested through Streamlit's `AppTest` harness �
 
 | To add | Change |
 |---|---|
-| A funnel stage | `config.funnel.stages` + unit/date column maps, then generator support |
+| A lateness threshold | `pipeline.LATENESS_THRESHOLDS` |
+| A comparison dimension | One entry in `experiments.COMPARISON_DIMENSIONS`, **with its confound** — the confound is required, not optional |
 | A quality dimension | `config.data_quality.weights` + a report function in `assessment.py` |
-| An A/B experiment | One entry under `config.ab_testing.experiments` — no code change |
-| A forecasting method | `config.forecasting.methods` + a `_fit_*` function in `forecasting.py` |
+| A cross-field invariant | `assessment._PAIRWISE_CHECKS` — it is applied automatically wherever both columns exist and are comparably typed |
+| A validity rule | `assessment._NAMED_RULES` |
 | A model algorithm | `config.ml.*.models` + `param_grid` + a branch in `train.get_model` |
-| A simulation lever | `config.simulation.levers` + an elasticity in `config.simulation.elasticity` |
 | A dashboard page | A file in `app/pages/`, composed from `src.dashboard.components` |
 | A chart type | A builder in `src/viz/charts.py` returning a themed `go.Figure` |
-| A real-data source | A parser in `src/data/`, an accessor in `loader.py`, an entry in `config.datasets` |
+| A README figure | A function in `scripts/export_figures.py` — then **look at the PNG**; the horizontal-bar bug was caught no other way |
+| A dataset | A parser in `src/data/`, an accessor in `loader.py`, an entry in `config.datasets` and `EXPECTED_ROWS` in `scripts/fetch_data.py` |
 
-Most extensions are configuration edits, which is the point of pushing every constant
-into `config.yaml`.
+Most extensions are configuration edits, which is the point of pushing every
+constant into `config.yaml`.

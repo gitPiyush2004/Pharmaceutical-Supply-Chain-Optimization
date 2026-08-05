@@ -18,106 +18,123 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from src.config import get_config
-from src.viz.theme import (ARM_COLOURS, FUNNEL_SCALE, PALETTE, RISK_COLOURS,
-                           SEQUENCE, apply_theme, fmt_units, status_colour)
+from src.viz.theme import (FUNNEL_SCALE, PALETTE, SEQUENCE, apply_theme,
+                           status_colour)
 
 
 # ---------------------------------------------------------------------------
-# Funnel
+# Order-to-delivery pipeline
 # ---------------------------------------------------------------------------
-def funnel_chart(summary: pd.DataFrame, title: str = "Supply Chain Funnel",
-                 height: int = 480) -> go.Figure:
-    """Eight-stage supply chain funnel with conversion labels.
+# There is no unit-attrition funnel here, because SCMS cannot support one: it
+# states quantity once at order time and never restates it at delivery. See
+# src/analytics/pipeline.py. What these builders draw instead is attrition in
+# *value delivered on time*, which is measured rather than inferred.
+def value_funnel_chart(funnel: pd.DataFrame, title: str = "Value Through the Pipeline",
+                       height: int = 420) -> go.Figure:
+    """Commodity value by delivery outcome.
 
     Parameters
     ----------
-    summary
-        Output of :func:`src.analytics.funnel.funnel_summary`.
+    funnel
+        Output of :func:`src.analytics.pipeline.value_funnel`.
     """
-    # Plotly's own `textinfo="value"` renders 86196541 as "86.19654M". Building the
-    # label explicitly keeps it readable at a glance, which is the whole point of
-    # putting the number inside the band.
-    labels = [f"{fmt_units(units)}<br>{share:.0f}%"
-              for units, share in zip(summary["units"],
-                                      summary["cumulative_conversion_pct"])]
+    # Plotly's own `textinfo="value"` renders 1627584457 as "1.62758B". Building
+    # the label explicitly keeps it readable, which is the point of putting the
+    # number inside the band.
+    labels = [f"${value/1e6:,.0f}M<br>{share:.1f}%"
+              for value, share in zip(funnel["value_usd"], funnel["share_pct"])]
     fig = go.Figure(go.Funnel(
-        y=summary["stage"],
-        x=summary["units"],
-        text=labels,
-        textposition="inside",
-        textinfo="text",
-        opacity=0.95,
-        marker=dict(color=FUNNEL_SCALE[:len(summary)],
-                    line=dict(width=1, color="white")),
+        y=funnel["stage"], x=funnel["value_usd"],
+        text=labels, textposition="inside", textinfo="text", opacity=0.95,
+        marker=dict(color=FUNNEL_SCALE[:len(funnel)], line=dict(width=1, color="white")),
         connector=dict(line=dict(color=PALETTE["neutral"], width=1)),
-        hovertemplate=("<b>%{y}</b><br>Units: %{x:,.0f}<br>"
-                       "Share of intake: %{percentInitial:.1%}<extra></extra>"),
+        customdata=funnel["line_items"],
+        hovertemplate=("<b>%{y}</b><br>Value: $%{x:,.0f}<br>"
+                       "Line items: %{customdata:,}<extra></extra>"),
     ))
     return apply_theme(fig, title=title, height=height, showlegend=False)
 
 
-def funnel_dropoff_chart(summary: pd.DataFrame,
-                         title: str = "Unit Loss by Stage") -> go.Figure:
-    """Bar chart of stage-to-stage drop-off, with the worst stage highlighted."""
-    data = summary.iloc[1:].copy()  # Procurement has no predecessor
-    worst = data["dropoff_pct"].max()
-    colours = [PALETTE["danger"] if v == worst else PALETTE["primary"]
-               for v in data["dropoff_pct"]]
+def lateness_funnel_chart(funnel: pd.DataFrame,
+                          title: str = "Value Arriving Within N Days of Schedule",
+                          height: int = 380) -> go.Figure:
+    """Cumulative share of value arriving within each lateness threshold.
 
+    Monotone by construction, so unlike a coverage chart this reads correctly as a
+    funnel: each band is a superset of the one above it.
+    """
     fig = go.Figure(go.Bar(
-        x=data["stage"], y=data["dropoff_pct"], marker_color=colours,
-        text=[f"{v:.1f}%" for v in data["dropoff_pct"]], textposition="outside",
-        customdata=np.stack([data["units_lost"], data["value_lost_usd"]], axis=-1),
-        hovertemplate=("<b>%{x}</b><br>Drop-off: %{y:.2f}%<br>"
-                       "Units lost: %{customdata[0]:,.0f}<br>"
-                       "Value lost: $%{customdata[1]:,.0f}<extra></extra>"),
+        x=funnel["share_pct"], y=funnel["label"], orientation="h",
+        marker_color=FUNNEL_SCALE[:len(funnel)],
+        text=[f"{v:.1f}%" for v in funnel["share_pct"]], textposition="outside",
+        customdata=np.stack([funnel["value_usd"], funnel["line_items"]], axis=-1),
+        hovertemplate=("<b>%{y}</b><br>Share of value: %{x:.2f}%<br>"
+                       "Value: $%{customdata[0]:,.0f}<br>"
+                       "Line items: %{customdata[1]:,}<extra></extra>"),
     ))
-    fig.update_yaxes(title="Drop-off (%)")
-    return apply_theme(fig, title=title, height=380, showlegend=False)
+    fig.update_xaxes(title="Cumulative share of commodity value (%)", range=[0, 108])
+    fig.update_yaxes(autorange="reversed")
+    return apply_theme(fig, title=title, height=height, showlegend=False)
 
 
-def stage_delay_chart(delays: pd.DataFrame,
-                      title: str = "Average Dwell Time by Stage") -> go.Figure:
-    """Horizontal bar of stage dwell time, coloured against the bottleneck threshold."""
-    threshold = float(get_config().funnel.bottleneck.delay_days_threshold)
-    data = delays.sort_values("avg_delay_days")
-    colours = [PALETTE["danger"] if v > threshold else PALETTE["secondary"]
-               for v in data["avg_delay_days"]]
+def dwell_time_chart(breakdown: pd.DataFrame,
+                     title: str = "Pipeline Intervals (Median Days)",
+                     height: int = 400) -> go.Figure:
+    """Median duration of each pipeline interval, annotated with its denominator.
 
+    Every interval is measured on a different number of line items - the vendor-PO
+    interval only exists for direct-drop orders - so the coverage is drawn on the
+    bar rather than left in a footnote. A reader comparing 92 days against 154 days
+    needs to know the second figure rests on 66% more rows.
+    """
+    data = breakdown.sort_values("median_days")
     fig = go.Figure(go.Bar(
-        x=data["avg_delay_days"], y=data["stage"], orientation="h",
-        marker_color=colours,
-        text=[f"{v:.1f}d" for v in data["avg_delay_days"]], textposition="outside",
-        customdata=np.stack([data["median_delay_days"], data["p90_delay_days"],
-                             data["share_of_cycle_pct"]], axis=-1),
-        hovertemplate=("<b>%{y}</b><br>Mean: %{x:.1f} d<br>"
-                       "Median: %{customdata[0]:.1f} d<br>P90: %{customdata[1]:.1f} d<br>"
-                       "Share of cycle: %{customdata[2]:.1f}%<extra></extra>"),
+        x=data["median_days"], y=data["interval"], orientation="h",
+        marker_color=PALETTE["secondary"],
+        text=[f"{v:.0f}d  ({c:.0f}% of items)"
+              for v, c in zip(data["median_days"], data["coverage_pct"])],
+        textposition="outside",
+        customdata=np.stack([data["mean_days"], data["p90_days"],
+                             data["line_items"], data["coverage_pct"]], axis=-1),
+        hovertemplate=("<b>%{y}</b><br>Median: %{x:.1f} d<br>"
+                       "Mean: %{customdata[0]:.1f} d<br>P90: %{customdata[1]:.1f} d<br>"
+                       "Measured on %{customdata[2]:,} items "
+                       "(%{customdata[3]:.1f}%)<extra></extra>"),
     ))
-    fig.add_vline(x=threshold, line_dash="dash", line_color=PALETTE["danger"],
-                  annotation_text=f"Bottleneck threshold ({threshold:.0f}d)",
-                  annotation_position="top")
+    fig.add_vline(x=0, line_color=PALETTE["neutral"])
     fig.update_xaxes(title="Days")
-    return apply_theme(fig, title=title, height=400, showlegend=False)
+    return apply_theme(fig, title=title, height=height, showlegend=False)
 
 
-def funnel_comparison_chart(conversion: pd.DataFrame, dimension: str,
-                            title: str | None = None) -> go.Figure:
-    """Multi-series line showing cumulative conversion by segment across stages."""
-    stages = list(get_config().funnel.stages)
+def traceability_chart(trace: pd.DataFrame,
+                       title: str = "Milestone Recording Coverage",
+                       height: int = 380) -> go.Figure:
+    """Recording coverage per milestone, splitting structural absence from gaps.
+
+    Deliberately a stacked bar rather than a funnel. Coverage is non-monotone
+    (74% -> 44% -> 100%), and a funnel shape would imply shipments dropping out of
+    the process when in fact a fulfilment route simply has no vendor order to
+    record. The stack makes the distinction visible: dark blue is recorded, grey is
+    structurally absent, red is a genuine gap.
+    """
     fig = go.Figure()
-    for index, (_, row) in enumerate(conversion.iterrows()):
-        fig.add_trace(go.Scatter(
-            x=stages, y=[row[stage] for stage in stages],
-            mode="lines+markers", name=str(row[dimension]),
-            line=dict(width=2.5, color=SEQUENCE[index % len(SEQUENCE)]),
-            marker=dict(size=7),
-            hovertemplate=f"<b>{row[dimension]}</b><br>%{{x}}: %{{y:.1f}}%<extra></extra>",
-        ))
-    fig.update_yaxes(title="Units remaining (% of intake)")
-    return apply_theme(fig, title=title or f"Funnel Conversion by {dimension.title()}",
-                       height=420)
+    fig.add_trace(go.Bar(
+        x=trace["stage"], y=trace["recorded"], name="Recorded",
+        marker_color=PALETTE["primary"],
+        hovertemplate="<b>%{x}</b><br>Recorded: %{y:,}<extra></extra>"))
+    fig.add_trace(go.Bar(
+        x=trace["stage"], y=trace["structurally_absent"],
+        name="Structurally absent", marker_color="rgba(107,114,128,0.55)",
+        customdata=trace["interpretation"],
+        hovertemplate="<b>%{x}</b><br>Never existed: %{y:,}<br>%{customdata}<extra></extra>"))
+    fig.add_trace(go.Bar(
+        x=trace["stage"], y=trace["genuinely_missing"], name="Genuinely missing",
+        marker_color=PALETTE["danger"],
+        hovertemplate="<b>%{x}</b><br>Unrecorded: %{y:,}<extra></extra>"))
+    fig.update_layout(barmode="stack")
+    fig.update_yaxes(title="Line items")
+    fig.update_xaxes(tickangle=-20)
+    return apply_theme(fig, title=title, height=height)
 
 
 # ---------------------------------------------------------------------------
@@ -126,26 +143,43 @@ def funnel_comparison_chart(conversion: pd.DataFrame, dimension: str,
 #: Longest category label rendered on an axis before it is shortened.
 MAX_LABEL_CHARS = 28
 
-#: Readable axis titles for the column names that recur across charts.
+#: Readable axis titles for the column names that recur across charts. Without
+#: this a reader sees the raw column name, and "median_freight_per_kg_usd" on an
+#: axis is the kind of detail that makes a dashboard look unfinished.
 _AXIS_LABELS: dict[str, str] = {
+    # --- delivery performance ---------------------------------------------
     "on_time_pct": "On-time delivery (%)", "avg_delay_days": "Average delay (days)",
-    "dropoff_pct": "Drop-off (%)", "value_lost_usd": "Value lost (USD)",
-    "line_value_usd": "Commodity value (USD)", "freight_cost_usd": "Freight (USD)",
-    "median_freight_per_kg_usd": "Median freight (USD/kg)",
-    "annual_value_usd": "Estimated annual value (USD)",
-    "value_usd": "Estimated annual value (USD)",
+    "mean_delay_days": "Mean delay (days)", "median_days": "Median duration (days)",
+    "delivery_delay_days": "Delivery delay (days)",
+    "scheduled_lead_time_days": "Scheduled lead time (days)",
+    "total_lead_time_days": "Quote-to-delivery (days)",
     "coverage_pct": "Milestone coverage (%)", "shipments": "Shipments",
-    "units": "Units", "batches": "Batches", "importance": "Importance",
+    "line_items": "Line items", "share_pct": "Share of value (%)",
+    "items_share_pct": "Share of line items (%)",
+    # --- money and volume --------------------------------------------------
+    "line_value_usd": "Commodity value (USD)", "freight_cost_usd": "Freight (USD)",
+    "value_usd": "Commodity value (USD)",
+    "median_freight_per_kg_usd": "Median freight (USD/kg)",
+    "freight_pct_of_value": "Freight as share of value (%)",
+    "annual_value_usd": "Estimated annual value (USD)",
+    "units_ordered": "Units", "packs_ordered": "Packs",
+    # --- Indian market -----------------------------------------------------
+    "price_inr": "Price (Rs)", "median_price_inr": "Median price (Rs)",
+    "products": "Products listed", "product_share_pct": "Share of listings (%)",
+    "discontinued_pct": "Discontinued (%)", "manufacturer": "Manufacturer",
+    "price_band": "Price band", "pack_form": "Pack form",
+    "ingredient": "Active ingredient", "cumulative_pct": "Cumulative share (%)",
+    # --- quality and ML ----------------------------------------------------
     "missing_pct": "Missing (%)", "outlier_pct": "Outliers (%)",
+    "importance": "Importance", "probability": "Probability",
     "capture_rate_pct": "Late deliveries captured (%)",
     "targeted_pct": "Shipments reviewed (%)", "precision_pct": "Precision (%)",
-    "qa_pass_rate_pct": "QA pass rate (%)", "fill_rate_pct": "Fill rate (%)",
-    "end_to_end_yield_pct": "End-to-end yield (%)",
-    "out_of_spec_pct": "Out of specification (%)",
-    "avg_potency_pct": "Mean potency (%)", "probability": "Probability",
+    # --- dimensions --------------------------------------------------------
     "vendor": "Vendor", "region": "Region", "shipment_mode": "Transport mode",
-    "brand_name": "Product", "stage": "Stage", "bucket": "Bucket",
-    "experiment": "Intervention", "area": "Area", "feature": "Feature",
+    "fulfil_via": "Fulfilment route", "product_group": "Product group",
+    "era": "Period", "country": "Destination country",
+    "stage": "Stage", "interval": "Pipeline interval", "level": "Group",
+    "feature": "Feature", "dataset": "Dataset", "dimension": "Dimension",
 }
 
 
@@ -286,29 +320,47 @@ def donut_chart(labels: list, values: list, title: str = "",
     return apply_theme(fig, title=title, height=height, showlegend=True)
 
 
-def pareto_chart(data: pd.DataFrame, category: str, value: str,
-                 cumulative: str, title: str = "", height: int = 420) -> go.Figure:
-    """Pareto chart: ranked bars plus a cumulative-share line on a second axis.
+def concentration_chart(ranked: pd.DataFrame, category: str, value: str,
+                        cumulative: str, title: str = "",
+                        height: int = 420, hhi: float | None = None) -> go.Figure:
+    """Ranked bars plus a cumulative-share line, scaled to the data.
 
-    The standard tool for "which few drivers explain most of the problem".
+    A Pareto chart with a fixed 80% reference line is the conventional tool here
+    and it would be actively misleading on this data: the ten largest Indian
+    manufacturers hold 7.7% of listings between them, so an 80% line would sit far
+    off the top of a flat curve and imply the chart was broken. The cumulative axis
+    is therefore scaled to what the data actually reaches, and the Herfindahl index
+    is annotated so the reader gets the concentration verdict as a number instead of
+    inferring it from a curve.
     """
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Bar(
-        x=data[category], y=data[value], name=value.replace("_", " ").title(),
+        x=ranked[category].astype(str), y=ranked[value], name=axis_label(value),
         marker_color=PALETTE["primary"],
         hovertemplate="<b>%{x}</b><br>%{y:,.0f}<extra></extra>",
     ), secondary_y=False)
     fig.add_trace(go.Scatter(
-        x=data[category], y=data[cumulative], name="Cumulative %",
+        x=ranked[category].astype(str), y=ranked[cumulative], name="Cumulative share",
         mode="lines+markers", line=dict(color=PALETTE["accent"], width=2.5),
         marker=dict(size=7),
-        hovertemplate="<b>%{x}</b><br>Cumulative: %{y:.1f}%<extra></extra>",
+        hovertemplate="<b>%{x}</b><br>Cumulative: %{y:.2f}%<extra></extra>",
     ), secondary_y=True)
-    fig.add_hline(y=80, line_dash="dash", line_color=PALETTE["neutral"],
-                  secondary_y=True, annotation_text="80%")
-    fig.update_yaxes(title_text="Value", secondary_y=False)
-    fig.update_yaxes(title_text="Cumulative (%)", range=[0, 105], secondary_y=True)
-    fig.update_xaxes(tickangle=-30)
+
+    reached = float(ranked[cumulative].max())
+    if hhi is not None:
+        verdict = ("Highly concentrated" if hhi > 2500
+                   else "Moderately concentrated" if hhi > 1500
+                   else "Fragmented")
+        fig.add_annotation(
+            x=0.99, y=0.97, xref="paper", yref="paper", showarrow=False,
+            align="right", font=dict(size=12, color=PALETTE["neutral"]),
+            text=(f"Herfindahl index <b>{hhi:,.0f}</b> - {verdict}<br>"
+                  f"These {len(ranked)} firms hold {reached:.1f}% of listings"))
+
+    fig.update_yaxes(title_text=axis_label(value), secondary_y=False)
+    fig.update_yaxes(title_text="Cumulative share (%)", secondary_y=True,
+                     range=[0, max(reached * 1.35, 1.0)], showgrid=False)
+    fig.update_xaxes(tickangle=-35)
     return apply_theme(fig, title=title, height=height)
 
 
@@ -396,27 +448,85 @@ def model_comparison_chart(comparison: pd.DataFrame, metric: str = "test_f1_macr
 
 
 # ---------------------------------------------------------------------------
-# Forecasting
+# Statistical comparison
 # ---------------------------------------------------------------------------
-def ab_comparison_chart(summary: pd.DataFrame, metric_name: str = "Success Rate",
-                        title: str = "Control vs Treatment", height: int = 400) -> go.Figure:
-    """Arm success rates with Wilson confidence intervals as error bars."""
+def rate_comparison_chart(rates: pd.DataFrame, dimension: str = "level",
+                          title: str = "On-Time Rate by Group",
+                          target: float | None = None, height: int = 400) -> go.Figure:
+    """On-time rate per group, with the group size on the bar.
+
+    Sample size is drawn rather than hidden because on observational data the
+    groups are wildly unequal - a 99.2% rate on 253 shipments and an 86.4% rate on
+    3,127 are not equally trustworthy, and the chart should not pretend otherwise.
+
+    Parameters
+    ----------
+    rates
+        Output of :func:`src.analytics.experiments.group_rates`.
+    target
+        Optional target line (e.g. ``config.scms.on_time_target_pct``).
+    """
+    data = rates.sort_values("on_time_pct")
     fig = go.Figure(go.Bar(
-        x=summary["arm"], y=summary["success_rate_pct"],
-        marker_color=[ARM_COLOURS.get(a, PALETTE["primary"]) for a in summary["arm"]],
-        error_y=dict(
-            type="data", symmetric=False,
-            array=summary["ci_upper_pct"] - summary["success_rate_pct"],
-            arrayminus=summary["success_rate_pct"] - summary["ci_lower_pct"],
-            color=PALETTE["neutral"], thickness=1.6, width=8),
-        text=[f"{v:.2f}%" for v in summary["success_rate_pct"]], textposition="outside",
-        customdata=np.stack([summary["subjects"], summary["successes"]], axis=-1),
-        hovertemplate=("<b>%{x}</b><br>Rate: %{y:.2f}%<br>"
-                       "Subjects: %{customdata[0]:,}<br>"
-                       "Successes: %{customdata[1]:,}<extra></extra>"),
+        x=data["on_time_pct"], y=data[dimension].astype(str), orientation="h",
+        marker_color=[status_colour(v, target or 90.0) for v in data["on_time_pct"]],
+        text=[f"{v:.2f}%  (n={n:,})" for v, n in zip(data["on_time_pct"], data["n"])],
+        textposition="outside",
+        customdata=np.stack([data["n"], data["late"], data["mean_delay_days"]], axis=-1),
+        hovertemplate=("<b>%{y}</b><br>On time: %{x:.2f}%<br>"
+                       "Shipments: %{customdata[0]:,}<br>"
+                       "Late: %{customdata[1]:,}<br>"
+                       "Mean delay: %{customdata[2]:.1f} d<extra></extra>"),
     ))
-    fig.update_yaxes(title=f"{metric_name} (%)")
+    if target is not None:
+        fig.add_vline(x=target, line_dash="dash", line_color=PALETTE["danger"],
+                      annotation_text=f"Target {target:.0f}%",
+                      annotation_position="top")
+    fig.update_xaxes(title="On-time delivery (%)", range=[0, 108])
     return apply_theme(fig, title=title, height=height, showlegend=False)
+
+
+def stratified_effect_chart(strata: pd.DataFrame, dimension: str, by: str,
+                            title: str | None = None, height: int = 400) -> go.Figure:
+    """Two group rates plotted within each level of a third variable.
+
+    The stratification chart, and on this dataset it is load bearing: the pooled
+    fulfilment-route gap of 11.9 points is 1.9 points before 2011 and 20.5 points
+    after. Two converging or diverging lines make an interaction obvious in a way a
+    single pooled bar cannot.
+
+    Note that a *diverging* pair like this one is effect modification rather than
+    textbook Simpson's paradox - the lines never cross, so the sign never flips. The
+    chart handles both; only the wording of the surrounding narrative differs.
+
+    Parameters
+    ----------
+    strata
+        Output of :func:`src.analytics.experiments.stratified_comparison`
+        (``strata`` key), with one row per stratum and one column per group.
+    """
+    # Only the rate columns are series. The frame also carries n_<group> counts,
+    # which belong in the hover text rather than on a percentage axis.
+    rate_columns = [c for c in strata.columns if c.startswith("on_time_")]
+    fig = go.Figure()
+    for index, column in enumerate(rate_columns):
+        group = column.removeprefix("on_time_")
+        counts = strata.get(f"n_{group}")
+        fig.add_trace(go.Scatter(
+            x=strata[by].astype(str), y=strata[column], mode="lines+markers",
+            name=str(group),
+            customdata=counts if counts is not None else None,
+            line=dict(width=2.8, color=SEQUENCE[index % len(SEQUENCE)]),
+            marker=dict(size=11),
+            hovertemplate=(f"<b>{group}</b><br>%{{x}}<br>On time: %{{y:.2f}}%"
+                           + ("<br>Shipments: %{customdata:,}" if counts is not None else "")
+                           + "<extra></extra>"),
+        ))
+    fig.update_yaxes(title="On-time delivery (%)")
+    fig.update_xaxes(title=axis_label(by))
+    return apply_theme(
+        fig, title=title or f"{axis_label(dimension)} effect within {axis_label(by)}",
+        height=height)
 
 
 def significance_chart(z_result: dict, title: str = "Effect Size with 95% Confidence Interval",
@@ -469,122 +579,17 @@ def segment_effect_chart(segments: pd.DataFrame, dimension: str = "region",
     return apply_theme(fig, title=title, height=height, showlegend=False)
 
 
-# ---------------------------------------------------------------------------
-# Simulation
-# ---------------------------------------------------------------------------
-def risk_distribution_chart(counts: pd.Series, title: str = "Batch Risk Distribution",
-                            height: int = 340) -> go.Figure:
-    """Bar chart of batch counts by risk tier, using the shared risk palette."""
-    order = [tier for tier in ("Low", "Medium", "High", "Critical") if tier in counts.index]
-    values = [counts[tier] for tier in order]
-    fig = go.Figure(go.Bar(
-        x=order, y=values, marker_color=[RISK_COLOURS[tier] for tier in order],
-        text=[f"{v:,}" for v in values], textposition="outside",
-        hovertemplate="<b>%{x} risk</b><br>Batches: %{y:,}<extra></extra>",
-    ))
-    fig.update_yaxes(title="Batches")
-    return apply_theme(fig, title=title, height=height, showlegend=False)
-
-
-def potency_distribution_chart(batches: pd.DataFrame, title: str = "Potency Distribution",
-                               height: int = 400) -> go.Figure:
-    """Histogram of batch potency with the specification limit marked."""
-    spec = float(get_config().stability.potency_spec_min)
-    fig = go.Figure(go.Histogram(
-        x=batches["potency_pct"], nbinsx=45, marker_color=PALETTE["primary"],
-        opacity=0.85, hovertemplate="Potency: %{x:.1f}%<br>Batches: %{y}<extra></extra>",
-    ))
-    fig.add_vline(x=spec, line_dash="dash", line_color=PALETTE["danger"], line_width=2,
-                  annotation_text=f"Spec limit ({spec:.0f}%)", annotation_position="top left")
-    out_of_spec = 100 * (batches["potency_pct"] < spec).mean()
-    fig.add_annotation(
-        x=0.02, y=0.95, xref="paper", yref="paper", showarrow=False, align="left",
-        text=f"<b>{out_of_spec:.1f}%</b> of batches out of specification",
-        font=dict(size=12, color=PALETTE["danger"]),
-    )
-    fig.update_xaxes(title="Potency (% of label claim)")
-    fig.update_yaxes(title="Batches")
-    return apply_theme(fig, title=title, height=height, showlegend=False)
-
-
-def condition_effect_chart(effect: pd.DataFrame, x_col: str, title: str,
-                           x_label: str, height: int = 400) -> go.Figure:
-    """Dual-axis view of mean potency and out-of-spec rate across a condition.
-
-    Accepts either ``avg_potency_pct`` (the name the stability module emits) or
-    ``avg_potency``, so the chart is not coupled to one caller's naming.
-    """
-    potency_col = next(
-        (c for c in ("avg_potency_pct", "avg_potency") if c in effect.columns), None)
-    if potency_col is None:
-        raise KeyError(
-            "condition_effect_chart needs an 'avg_potency_pct' or 'avg_potency' "
-            f"column; got {list(effect.columns)}"
-        )
-
-    # Cohorts (cold chain versus ambient) are plotted as separate potency traces
-    # so a reader can see that the two behave differently rather than seeing a
-    # misleading pooled average.
-    cohorts = ([c for c in effect["cohort"].dropna().unique()]
-               if "cohort" in effect.columns else [None])
-
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    totals = (effect.groupby(x_col, as_index=False)["batches"].sum()
-              if "cohort" in effect.columns else effect)
-    fig.add_trace(go.Bar(
-        x=totals[x_col].astype(str), y=totals["batches"], name="Batches",
-        marker_color="rgba(107,114,128,0.30)",
-        hovertemplate="%{x}<br>Batches: %{y:,}<extra></extra>",
-    ), secondary_y=True)
-
-    for index, cohort in enumerate(cohorts):
-        subset = effect if cohort is None else effect[effect["cohort"] == cohort]
-        subset = subset.sort_values(x_col)
-        fig.add_trace(go.Scatter(
-            x=subset[x_col].astype(str), y=subset[potency_col],
-            name="Mean potency" if cohort is None else f"Potency - {cohort}",
-            mode="lines+markers",
-            line=dict(color=SEQUENCE[index % len(SEQUENCE)], width=2.5),
-            marker=dict(size=8),
-            hovertemplate="%{x}<br>Potency: %{y:.2f}%<extra></extra>",
-        ), secondary_y=False)
-
-    effect = effect.groupby(x_col, as_index=False).agg(
-        out_of_spec_pct=("out_of_spec_pct", "mean")
-    ) if "cohort" in effect.columns and "out_of_spec_pct" in effect.columns else effect
-    if "out_of_spec_pct" in effect.columns:
-        fig.add_trace(go.Scatter(
-            x=effect[x_col].astype(str), y=effect["out_of_spec_pct"], name="Out of spec (%)",
-            mode="lines+markers", line=dict(color=PALETTE["danger"], width=2.5, dash="dot"),
-            marker=dict(size=7),
-            hovertemplate="%{x}<br>Out of spec: %{y:.1f}%<extra></extra>",
-        ), secondary_y=False)
-
-    fig.update_xaxes(title=x_label)
-    fig.update_yaxes(title="Potency (%) / Out of spec (%)", secondary_y=False)
-    fig.update_yaxes(title="Batches", secondary_y=True, showgrid=False)
-    return apply_theme(fig, title=title, height=height)
-
-
 __all__ = [
-    "funnel_chart",
-    "funnel_dropoff_chart",
-    "stage_delay_chart",
-    "funnel_comparison_chart",
-    "bar_chart",
-    "line_chart",
-    "heatmap",
-    "donut_chart",
-    "pareto_chart",
-    "confusion_matrix_chart",
-    "roc_curves_chart",
-    "pr_curves_chart",
-    "feature_importance_chart",
-    "model_comparison_chart",
-    "ab_comparison_chart",
-    "significance_chart",
-    "segment_effect_chart",
-    "risk_distribution_chart",
-    "potency_distribution_chart",
-    "condition_effect_chart",
+    # pipeline
+    "value_funnel_chart", "lateness_funnel_chart", "dwell_time_chart",
+    "traceability_chart",
+    # generic
+    "bar_chart", "line_chart", "heatmap", "donut_chart",
+    "concentration_chart",
+    "shorten_labels", "axis_label", "MAX_LABEL_CHARS",
+    # machine learning
+    "confusion_matrix_chart", "roc_curves_chart", "pr_curves_chart",
+    "feature_importance_chart", "model_comparison_chart",
+    # statistical comparison
+    "rate_comparison_chart", "stratified_effect_chart", "significance_chart",
 ]

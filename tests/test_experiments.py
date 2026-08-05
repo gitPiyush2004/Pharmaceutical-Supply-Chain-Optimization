@@ -4,8 +4,10 @@ Tests for the statistical-comparison layer on real SCMS data.
 Two of these encode findings that were originally reported wrongly, so they exist
 to stop the project regressing to the misleading version:
 
-* **B3** - the fulfilment-route gap is Simpson's paradox. The pooled figure must not
-  be presented as a stable structural difference.
+* **B3** - the fulfilment-route gap interacts strongly with era, so the pooled figure
+  must not be presented as a stable structural difference. Note the precise claim:
+  this is *effect modification*, not Simpson's paradox, because the gap never reverses
+  sign - and the tests below assert both halves of that distinction.
 * **B4** - on skewed freight metrics a mean-based test and a rank-based test reach
   opposite conclusions, and the skewed one must not be quoted.
 """
@@ -85,8 +87,23 @@ class TestGroupComparison:
 
 
 # ---------------------------------------------------------------------------
-class TestSimpsonsParadox:
+class TestStratification:
     """B3 - the pooled fulfilment-route gap hides an era interaction."""
+
+    def test_it_is_not_claimed_to_be_a_sign_reversal(self, scms):
+        """The precision half of the finding, and it is easy to get wrong.
+
+        Textbook Simpson's paradox requires the difference to reverse sign between
+        strata. Here it does not - direct drop leads in both eras - so the honest
+        name is effect modification. The README, the dashboard and the notebook all
+        say so, and this test fails if the code ever starts claiming otherwise.
+        """
+        result = ex.stratified_comparison(scms, dimension="fulfil_via", by="era")
+        assert not result["is_simpsons_paradox"], (
+            "no sign reversal exists in this data; claiming Simpson's paradox "
+            "would overstate the finding")
+        assert (result["strata"]["gap_pp"] > 0).all(), "the sign must not flip"
+        assert "interaction" in result["verdict"].lower()
 
     def test_interaction_is_detected(self, scms):
         result = ex.stratified_comparison(scms, dimension="fulfil_via", by="era")
@@ -105,7 +122,7 @@ class TestSimpsonsParadox:
         assert late - early > 10
 
     def test_pooled_gap_sits_between_the_strata(self, scms):
-        """The signature of the paradox: the pooled number describes neither era."""
+        """The signature of the problem: the pooled number describes neither era."""
         result = ex.stratified_comparison(scms, dimension="fulfil_via", by="era")
         pooled = result["pooled"]["gap_pp"]
         gaps = result["strata"]["gap_pp"]

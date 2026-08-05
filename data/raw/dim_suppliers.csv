@@ -1,9 +1,0 @@
-supplier_id,supplier_name,country,reliability,lead_time_days,quality_rating,otif_pct,tier
-SUP-01,Aurobindo API Ltd,India,0.94,18,94.0,93.2,Preferred
-SUP-02,Divis Laboratories,India,0.96,16,96.0,95.2,Preferred
-SUP-03,Zhejiang Kangtai Chem,China,0.83,32,83.0,82.7,Watchlist
-SUP-04,Lonza Group AG,Switzerland,0.97,14,97.0,96.1,Preferred
-SUP-05,Cambrex Corporation,USA,0.95,12,95.0,94.2,Preferred
-SUP-06,Hikal Speciality,India,0.88,24,88.0,87.5,Approved
-SUP-07,Shandong Xinhua Pharm,China,0.8,35,80.0,79.8,Watchlist
-SUP-08,Siegfried Holding,Germany,0.96,15,96.0,95.2,Preferred

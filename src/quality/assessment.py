@@ -27,9 +27,9 @@ Accurate             :func:`validity_report` and :func:`outlier_report` - do
                      values sit inside their declared domain and their
                      plausible physical range?
 Consistent           :func:`consistency_report` - do cross-field relationships
-                     that must hold by construction actually hold? Units can
-                     never *increase* as a batch moves down the funnel, and a
-                     batch cannot be packaged before it is manufactured.
+                     that must hold by construction actually hold? A purchase
+                     order cannot precede its own quote, and a delivery cannot be
+                     recorded before it arrives.
 Available            :func:`assess_all` - one scoreboard, refreshed on demand,
                      that a reviewer can read in ten seconds.
 ===================  ========================================================
@@ -43,10 +43,12 @@ findings into named remediation actions, because an audit that stops at
 
 A note on honest scoring
 ------------------------
-The synthetic supply chain data this platform generates is clean by
-construction. A high score on it is the correct answer, not a failure of the
-audit - the module's value is that it *demonstrates* cleanliness with evidence
-and would catch a real defect on messier input. Nothing here inflates a problem
+All three datasets here are real, and they differ enormously in how messy they
+are. ``drug200`` is genuinely spotless, so a near-perfect score on it is the
+correct answer rather than a failure of the audit. SCMS is the opposite: it scores
+99.3% on a naive completeness check while 40% of its freight costs are unusable
+text, which is exactly the gap this module exists to expose - see
+:func:`src.data.scms.parsing_report` for the type-aware view. Nothing here inflates a problem
 to look thorough: binary flag columns are excluded from outlier detection, null
 values are excluded from validity checks (absence is a completeness defect, not
 an accuracy defect), and the accuracy dimension caps each column's penalty so a
@@ -54,15 +56,13 @@ naturally heavy-tailed variable such as batch value cannot drag down a score it
 has no business dragging down.
 
 Every threshold, weight and grade band is read from ``config/config.yaml``
-(``data_quality`` and ``funnel`` sections). The funnel ordering used by the
-consistency checks is the *same* ordering the rest of the platform uses, so
-reordering a stage in configuration reorders these checks too.
+(``data_quality`` section).
 
 Example
 -------
 >>> from src.quality.assessment import assess_all, assess_dataset
->>> assess_all()                      # scoreboard across all five tables
->>> report = assess_dataset("batches")
+>>> assess_all()                      # scoreboard across the three datasets
+>>> report = assess_dataset("scms")
 >>> report["score"]["grade"]
 'A'
 """
@@ -113,18 +113,14 @@ _DQ_DEFAULTS: dict[str, Any] = {
 # Severity vocabulary, ordered worst-first for sorting.
 _SEVERITY_ORDER: dict[str, int] = {"High": 0, "Medium": 1, "Low": 2, "None": 3}
 
-# The five platform tables and the business key that must be unique in each.
-# ``None`` means the table has no single natural key (drug200 is one row per
-# patient observation with no identifier column).
+# The three real datasets and the business key that must be unique in each.
+# ``None`` means the dataset has no natural key (drug200 is one row per patient
+# observation with no identifier column).
 _DATASET_KEYS: dict[str, list[str] | None] = {
+    # All three are real. drug200 has no surrogate key; the other two do.
     "drug200": None,
-    # The real USAID SCMS export. Its defects are genuine rather than injected,
-    # which makes it the most honest test of this module in the platform.
     "scms": ["ID"],
-    "batches": ["batch_id"],
-    "shipments": ["shipment_id"],
-    "inventory": ["snapshot_month", "warehouse_id", "drug_code"],
-    "demand": ["date", "drug_code", "region"],
+    "indian_medicines": ["id"],
 }
 
 
@@ -147,31 +143,26 @@ _NAMED_RULES: dict[str, dict[str, Any]] = {
     "Drug": {"allowed": {"DrugY", "drugA", "drugB", "drugC", "drugX"}},
     "Age": {"min": 0, "max": 120},
     "Na_to_K": {"min": 0, "max": 100},
-    # --- supply chain flags and categoricals -------------------------------
-    "qa_result": {"allowed": {"Pass", "Fail"}},
-    "qa_pass": {"allowed": {0, 1}},
-    "is_cold_chain": {"allowed": {0, 1}},
+    # --- SCMS (real USAID delivery history) --------------------------------
     "is_late": {"allowed": {0, 1}},
-    "cold_chain_excursion": {"allowed": {0, 1}},
-    "temperature_excursion": {"allowed": {0, 1}},
-    "batch_risk_label": {"allowed": {"Low", "Medium", "High"}},
-    # --- supply chain measurements -----------------------------------------
-    "potency_pct": {"min": 0, "max": 100},
-    # Reliability is stored as a fraction, not a percentage.
-    "supplier_reliability": {"min": 0, "max": 1},
-    "shelf_life_months": {"min": 0},
-    "unit_cost_usd": {"min": 0},
-    "planned_transit_days": {"min": 0},
-    "actual_transit_days": {"min": 0},
-    "leg_sequence": {"min": 1},
-    "storage_duration_days": {"min": 0},
-    "total_cycle_time_days": {"min": 0},
-    "months_of_supply": {"min": 0},
-    "safety_stock": {"min": 0},
-    "reorder_point": {"min": 0},
-    "warehouse_capacity": {"min": 0},
-    "days_to_expiry": {"min": 0},
-    "days_to_expiry_at_delivery": {"min": 0},
+    "Shipment Mode": {"allowed": {"Air", "Truck", "Air Charter", "Ocean"}},
+    "Fulfill Via": {"allowed": {"From RDC", "Direct Drop"}},
+    "First Line Designation": {"allowed": {"Yes", "No"}},
+    "Line Item Quantity": {"min": 0},
+    "Line Item Value": {"min": 0},
+    "Pack Price": {"min": 0},
+    "Unit Price": {"min": 0},
+    "Unit of Measure (Per Pack)": {"min": 1},
+    "delivery_delay_days": {"min": -400, "max": 400},
+    "freight_cost_usd": {"min": 0},
+    "weight_kg": {"min": 0},
+    # --- Indian medicine master --------------------------------------------
+    # Rs 500,000 is comfortably above the observed Rs 436,000 maximum, so this
+    # catches a decimal-point error without flagging genuine speciality pricing.
+    "price_inr": {"min": 0, "max": 500_000},
+    "price(\u20b9)": {"min": 0, "max": 500_000},
+    "ingredient_count": {"min": 0, "max": 10},
+    "pack_quantity": {"min": 0},
 }
 
 # Pattern rules cover families of columns that share a physical constraint, so
@@ -260,6 +251,37 @@ def _numeric_columns(df: pd.DataFrame) -> list[str]:
         if pd.api.types.is_numeric_dtype(df[column])
         and not pd.api.types.is_datetime64_any_dtype(df[column])
     ]
+
+
+def _flatten_containers(df: pd.DataFrame) -> pd.DataFrame:
+    """Stringify any cell holding a list, dict or set, returning a copy.
+
+    Profiling relies on hashing (uniqueness, duplicate detection, value counts)
+    and Python containers are unhashable, so a frame with a parsed list column
+    would raise ``TypeError: unhashable type: 'list'`` several layers down. The
+    Indian medicine master has exactly that shape: ``ingredients`` is a parsed
+    list per row.
+
+    Stringifying is the right fix rather than dropping the column - it preserves
+    what the audit needs (two rows with the same ingredients still count as
+    identical) without pretending the column does not exist. The original frame is
+    never modified.
+    """
+    container_columns = [
+        column for column in df.columns
+        if df[column].dtype == object
+        and df[column].dropna().head(100).map(
+            lambda value: isinstance(value, (list, dict, set))).any()
+    ]
+    if not container_columns:
+        return df
+    out = df.copy()
+    for column in container_columns:
+        out[column] = out[column].map(
+            lambda value: (", ".join(map(str, value))
+                           if isinstance(value, (list, set))
+                           else str(value) if isinstance(value, dict) else value))
+    return out
 
 
 def _empty_frame(columns: Sequence[str]) -> pd.DataFrame:
@@ -367,6 +389,7 @@ def duplicate_report(
     sample_rows = int(_dq("sample_rows"))
     n_rows = len(df)
 
+    df = _flatten_containers(df)
     exact_mask = df.duplicated(keep="first") if n_rows else pd.Series(dtype=bool)
     exact_count = int(exact_mask.sum())
     result: dict[str, Any] = {
@@ -629,7 +652,14 @@ def summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
         count = int(len(values))
 
         if column in numeric_columns:
-            numeric = pd.to_numeric(values, errors="coerce").dropna()
+            # Booleans count as numeric for profiling (a share of True is a useful
+            # statistic) but numpy cannot compute a quantile on a bool dtype, so
+            # cast first. The Indian dataset's `Is_discontinued` arrives as bool
+            # straight from the CSV and hits this path.
+            numeric = pd.to_numeric(values, errors="coerce", downcast=None)
+            if pd.api.types.is_bool_dtype(numeric):
+                numeric = numeric.astype("int8")
+            numeric = numeric.dropna()
             rows.append(
                 {
                     "column": str(column),
@@ -687,36 +717,46 @@ def summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # 6. Consistency
 # ---------------------------------------------------------------------------
-# Pairwise invariants that are not part of the funnel walk. Each entry is
-# (left, right, operator, description) where the rule reads "left <op> right".
+# Cross-field invariants that must hold by construction in the real datasets.
+# Each entry is (left, right, operator, description), read as "left <op> right".
+# A check is applied only when both columns are present, so one list serves all
+# three datasets without any of them needing to know about the others.
 _PAIRWISE_CHECKS: tuple[tuple[str, str, str, str], ...] = (
+    # --- SCMS chronology ---------------------------------------------------
+    # Only the parsed column names appear here. The raw SCMS date columns hold
+    # strings, and `"5/3/13" <= "02-Jun-13"` is a lexicographic comparison that
+    # means nothing - running these against the unparsed frame reported an 82%
+    # violation rate that was entirely an artefact of comparing text.
     (
-        "expiry_date", "date_manufacturing", ">",
-        "Expiry date must fall after the manufacturing date - a batch cannot "
-        "expire before it exists.",
+        "date_po_sent", "date_delivered", "<=",
+        "A purchase order must precede its own delivery.",
     ),
     (
-        "units_received", "units_shipped", "<=",
-        "Units received cannot exceed units shipped - stock does not multiply "
-        "in transit.",
+        "date_pq_sent", "date_delivered", "<=",
+        "A price quote must precede the delivery it led to.",
     ),
     (
-        "units_fulfilled", "units_demanded", "<=",
-        "Units fulfilled cannot exceed units demanded - fill rate would exceed "
-        "100%.",
+        "date_delivered", "date_recorded", "<=",
+        "A delivery cannot be recorded in the system before it physically arrives.",
     ),
 )
-# Note: no ``units_issued`` vs ``units_on_hand`` rule. ``units_on_hand`` is a
-# closing snapshot and ``units_issued`` a flow over the month, so neither
-# direction is an invariant - asserting one would manufacture violations.
-
-
-def _ordered_funnel_columns(kind: str) -> list[str]:
-    """Funnel column names in configured stage order (``kind`` = units|dates)."""
-    cfg = get_config()
-    mapping = cfg.funnel.unit_columns if kind == "units" else cfg.funnel.date_columns
-    return [mapping[stage] for stage in cfg.funnel.stages if stage in mapping]
-
+# Two rules are deliberately absent, and both absences were mistakes I made first.
+#
+# 1. Any units-in versus units-out rule. SCMS states quantity once at order time
+#    and never restates it at delivery, so there is no shipped-versus-received pair
+#    to compare. Asserting one would manufacture violations out of thin air.
+#
+# 2. `ingredient_count <= pack_quantity` on the Indian master. This looks like an
+#    invariant and is not: "vial of 1 Powder for Injection" holding amoxicillin and
+#    clavulanic acid is a single-unit pack with two molecules, which is completely
+#    normal. The rule flagged 7,886 products (3.1%) as inconsistent when every one
+#    of them was correct. It is removed rather than tuned, because the problem was
+#    the premise.
+#
+# The Indian master therefore has no cross-field invariant to test. That is the
+# honest answer for a flat product catalogue with no derived quantities - it scores
+# 100 on consistency vacuously, and :func:`consistency_report` returns an empty
+# frame rather than inventing something to check.
 
 def _compare(left: pd.Series, right: pd.Series, operator: str) -> pd.Series:
     """Boolean mask of rows SATISFYING ``left <operator> right``."""
@@ -729,55 +769,59 @@ def _compare(left: pd.Series, right: pd.Series, operator: str) -> pd.Series:
     return left < right
 
 
+def _breach_mask(df: pd.DataFrame,
+                 check: tuple[str, str, str, str]) -> pd.Series:
+    """Boolean mask of rows that VIOLATE ``check``.
+
+    A row only counts as a violation when both sides are populated. Rows with a
+    null on either side are unknown, not wrong, and counting them would turn a
+    missing-data problem into a fabricated consistency failure.
+    """
+    left, right, operator, _ = check
+    both_present = df[left].notna() & df[right].notna()
+    return both_present & ~_compare(df[left], df[right], operator)
+
+
 def _applicable_consistency_checks(
     df: pd.DataFrame,
 ) -> list[tuple[str, str, str, str]]:
-    """Assemble the ``(left, right, operator, description)`` checks this frame supports."""
-    checks: list[tuple[str, str, str, str]] = []
+    """Select the ``(left, right, operator, description)`` checks this frame supports.
 
-    # Funnel monotonicity: units may only ever fall, dates may only ever advance.
-    units = [c for c in _ordered_funnel_columns("units") if c in df.columns]
-    for left, right in zip(units, units[1:]):
-        checks.append(
-            (left, right, ">=",
-             f"Funnel monotonicity: {left} must be >= {right}; units cannot be "
-             "created between stages.")
-        )
-    dates = [c for c in _ordered_funnel_columns("dates") if c in df.columns]
-    for left, right in zip(dates, dates[1:]):
-        checks.append(
-            (left, right, "<=",
-             f"Chronology: {left} must not fall after {right}; a batch cannot "
-             "reach a stage before the one preceding it.")
-        )
-    checks.extend(_PAIRWISE_CHECKS)
-    return [
-        check for check in checks
-        if check[0] in df.columns and check[1] in df.columns
-    ]
-
-
-def _breach_mask(df: pd.DataFrame, check: tuple[str, str, str, str]) -> pd.Series:
-    """Boolean mask of rows that BREACH one cross-field invariant."""
-    left, right, operator, _ = check
-    both_present = df[left].notna() & df[right].notna()
-    satisfied = _compare(df[left], df[right], operator)
-    return both_present & ~satisfied.fillna(False)
+    Only checks whose columns are both present are returned, so each dataset is
+    tested against the invariants that actually apply to it.
+    """
+    applicable = []
+    for check in _PAIRWISE_CHECKS:
+        left, right, _, _ = check
+        if left not in df.columns or right not in df.columns:
+            continue
+        # An ordering comparison is only meaningful between two comparable types.
+        # Two datetimes or two numerics are fine; anything else (most importantly
+        # two date-shaped *strings*) would compare lexicographically and report
+        # nonsense as a violation.
+        both_datetime = (pd.api.types.is_datetime64_any_dtype(df[left])
+                         and pd.api.types.is_datetime64_any_dtype(df[right]))
+        both_numeric = (pd.api.types.is_numeric_dtype(df[left])
+                        and pd.api.types.is_numeric_dtype(df[right]))
+        if both_datetime or both_numeric:
+            applicable.append(check)
+    return applicable
 
 
 def consistency_report(df: pd.DataFrame) -> pd.DataFrame:
     """Test cross-field invariants that must hold by construction.
 
     This is the part of the audit that actually proves the data is trustworthy.
-    A missing value is visible; a batch whose ``units_packaged`` exceeds its
-    ``units_qa_passed`` is not - the frame looks perfectly complete and every
-    value is individually plausible, yet the record describes something that
-    cannot physically happen. Only a cross-field check catches it.
+    A missing value is visible; a shipment whose purchase order postdates its own
+    delivery is not - the frame looks perfectly complete and each date is
+    individually plausible, yet the record describes something that cannot have
+    happened. Only a cross-field check catches it, and on this dataset it caught a
+    real bug: parsing all five date columns with one format rule produced 1,128
+    purchase orders that preceded their own price quote.
 
-    The funnel ordering comes from ``config.funnel``, so it stays in lockstep
-    with the rest of the platform. Only rows where both sides of a comparison
-    are populated are counted, and only checks whose columns are both present
-    are run.
+    Checks are selected by column presence, so each dataset is tested only against
+    the invariants that apply to it. Only rows where both sides of a comparison are
+    populated are counted - a null on either side is unknown, not wrong.
 
     Parameters
     ----------
@@ -1245,6 +1289,33 @@ def preprocessing_recommendations(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # 9-10. Platform-level orchestration
 # ---------------------------------------------------------------------------
+def _load_layer(name: str, raw: bool) -> pd.DataFrame:
+    """Load either the source file as published or its interpreted form.
+
+    This is the honest version of a bronze/silver split. There is no generic
+    cleaning layer any more, so "interpreted" does not mean "imputed" - it means
+    the dataset has been through the module that knows how to read it:
+
+    * ``scms`` - per-column date formats parsed, and every ambiguous value given a
+      reason code that distinguishes structural absence from a genuine gap.
+    * ``indian_medicines`` - price parsed to a number, pack labels parsed into a
+      form and a quantity, composition split into ingredients.
+    * ``drug200`` - identical in both layers. It is published clean, and inventing
+      a difference to make the comparison look better would defeat the point.
+
+    The scores therefore measure what type-aware parsing recovers, not what an
+    imputer papers over.
+    """
+    if raw:
+        # load_table caches; .copy() guarantees the audit cannot touch the cache.
+        return loader.load_table(name).copy()
+    if name == "scms":
+        return loader.load_scms()
+    if name == "indian_medicines":
+        return loader.load_indian_medicines()
+    return loader.load_table(name).copy()
+
+
 def assess_dataset(name: str, raw: bool = True) -> dict[str, Any]:
     """Run the full audit against one named platform table.
 
@@ -1256,8 +1327,9 @@ def assess_dataset(name: str, raw: bool = True) -> dict[str, Any]:
     raw : bool, default True
         Profile the *bronze* extract, which is the point of a data quality
         audit: you assess what the source systems handed over, before any
-        remediation. Pass ``False`` to assess the cleaned *silver* layer -
-        useful for proving the cleaning layer actually worked.
+        the source file exactly as published. Pass ``False`` to assess the
+        interpreted form produced by the dataset's own parser - the comparison
+        measures what type-aware parsing recovers.
 
     Returns
     -------
@@ -1270,15 +1342,15 @@ def assess_dataset(name: str, raw: bool = True) -> dict[str, Any]:
     Raises
     ------
     KeyError
-        If ``name`` is not one of the five platform tables.
+        If ``name`` is not one of the three datasets.
     """
     if name not in _DATASET_KEYS:
         raise KeyError(
             f"Unknown dataset '{name}'. Known: {sorted(_DATASET_KEYS)}"
         )
 
-    # load_table caches; .copy() guarantees the audit cannot touch the cache.
-    frame = loader.load_table(name, raw=raw).copy()
+    # Flattened once here so every report below can hash freely.
+    frame = _flatten_containers(_load_layer(name, raw))
     key = _DATASET_KEYS[name]
     log.info("Assessing '%s' (%d rows x %d cols).", name, *frame.shape)
 
@@ -1287,7 +1359,7 @@ def assess_dataset(name: str, raw: bool = True) -> dict[str, Any]:
         "rows": int(frame.shape[0]),
         "columns": int(frame.shape[1]),
         "key_columns": list(key) if key else [],
-        "layer": "bronze (raw extract)" if raw else "silver (cleaned)",
+        "layer": "as published" if raw else "interpreted",
         "missing": missing_value_report(frame),
         "duplicates": duplicate_report(frame, subset=key),
         "validity": validity_report(frame),
@@ -1305,11 +1377,10 @@ def assess_all(names: Iterable[str] | None = None, raw: bool = True) -> pd.DataF
     Parameters
     ----------
     names : iterable of str, optional
-        Tables to assess. Defaults to all five platform tables.
+        Datasets to assess. Defaults to all three.
     raw : bool, default True
-        Assess the bronze extract. Pass ``False`` to score the cleaned layer;
-        running both is how the dashboard demonstrates the uplift delivered by
-        the cleaning pipeline.
+        Score the file as published. Pass ``False`` to score the interpreted
+        form; running both is how the dashboard shows what parsing recovers.
 
     Returns
     -------
@@ -1343,7 +1414,7 @@ def assess_all(names: Iterable[str] | None = None, raw: bool = True) -> pd.DataF
         ["overall_score", "dataset"], ascending=[True, True]
     ).reset_index(drop=True)
     log.info(
-        "Scoreboard: %d tables assessed, lowest score %.2f (%s).",
+        "Scoreboard: %d datasets assessed, lowest score %.2f (%s).",
         len(scoreboard),
         float(scoreboard["overall_score"].min()) if len(scoreboard) else 0.0,
         scoreboard["dataset"].iloc[0] if len(scoreboard) else "n/a",
@@ -1352,16 +1423,19 @@ def assess_all(names: Iterable[str] | None = None, raw: bool = True) -> pd.DataF
 
 
 def quality_uplift(names: Iterable[str] | None = None) -> pd.DataFrame:
-    """Score the bronze and silver layers side by side to quantify the cleaning uplift.
+    """Score the published and interpreted layers side by side.
 
-    This is the headline evidence that the pipeline earns its keep: the same
-    scoring function applied before and after remediation, with the delta per
-    quality dimension.
+    The same scoring function applied before and after parsing, with the delta per
+    quality dimension. Note what this does *not* show: a large uplift. Generic
+    scoring barely moves, because the SCMS defects are semantic rather than
+    structural - `N/A - From RDC` is a perfectly non-null string. That is the
+    finding, and :func:`src.data.scms.parsing_report` is where the real gap shows
+    up. A uplift table that flattered the pipeline would be hiding it.
 
     Parameters
     ----------
     names : iterable of str, optional
-        Tables to compare. Defaults to all platform tables.
+        Datasets to compare. Defaults to all three.
 
     Returns
     -------

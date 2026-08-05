@@ -1,6 +1,0 @@
-drug_code,brand_name,therapeutic_area,form,strength_mg,unit_cost_usd,shelf_life_months,storage_condition,is_cold_chain,volume_share
-DrugY,Cardiovex,Cardiovascular,Tablet,50,2.4,36,Controlled Room Temperature,0,0.455
-DrugX,Nephrolyte,Nephrology,Tablet,25,1.85,30,Controlled Room Temperature,0,0.27
-DrugA,Angiotrol,Hypertension,Injection,10,9.6,18,Cold Chain 2-8C,1,0.115
-DrugB,Betacor,Hypertension,Capsule,100,3.15,24,Controlled Room Temperature,0,0.08
-DrugC,Cholestat,Lipid Disorders,Injection,20,12.3,15,Cold Chain 2-8C,1,0.08

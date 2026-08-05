@@ -9,16 +9,23 @@ commodities to 43 developing countries between 2006 and 2015. Published by USAID
 as open data and mirrored on Kaggle as *Supply Chain Shipment Pricing Data*.
 
 This is genuine operational data from a real health supply chain, and it is the
-backbone of every procurement, vendor and logistics metric in the platform. The
-simulated digital twin (``src/data/generator.py``) is retained only for the two
-domains this dataset does not cover - per-batch storage telemetry and inventory
-snapshots - and the dashboard labels which is which.
+backbone of every procurement, vendor, logistics and statistical-testing metric in
+the platform.
+
+What it does not cover is worth stating: SCMS records procurement and logistics,
+not manufacturing. There are no batch quality outcomes, no storage temperature or
+humidity telemetry and no inventory snapshots. Earlier versions of this project
+filled those gaps with a simulation; that simulation is gone, and the analyses that
+depended on it are gone with it rather than being propped up by invented data.
 
 What makes it valuable
 ----------------------
-* **A real procurement funnel.** Four milestone dates per line item: price quote
+* **A real procurement pipeline.** Five milestone dates per line item: price quote
   sent to client, purchase order sent to vendor, scheduled delivery, delivery to
-  client. Real lead times and real slippage.
+  client, delivery recorded. Real lead times and real slippage. Note that this is
+  *not* a volume funnel - quantity is stated once at order time and never restated,
+  so units cannot be tracked draining between stages. See
+  :mod:`src.analytics.pipeline`.
 * **Real vendor and manufacturing performance.** 73 vendors and 88 manufacturing
   sites, so supplier scorecards are measured rather than invented.
 * **Real logistics economics.** Freight cost, weight, pack price and unit price

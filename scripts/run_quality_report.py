@@ -2,14 +2,19 @@
 """
 Run the data quality audit and export a multi-sheet Excel report.
 
-Profiles the raw (bronze) extract, scores five quality dimensions per table,
-records the uplift delivered by the cleaning layer, and writes everything to
+Profiles each dataset as published, scores five quality dimensions, measures what
+type-aware parsing changes, and writes everything to
 ``reports/data_quality_report.xlsx`` for circulation outside the dashboard.
+
+The headline result is deliberately unflattering: parsing SCMS *lowers* its generic
+score, because replacing unparseable text with honest nulls costs completeness. That
+is the point of the report - a generic profiler grades this file an A while 40% of
+its freight costs are unusable.
 
 Usage
 -----
     python scripts/run_quality_report.py
-    python scripts/run_quality_report.py --dataset batches
+    python scripts/run_quality_report.py --dataset scms
     python scripts/run_quality_report.py --no-excel      # console output only
 """
 
@@ -25,14 +30,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd  # noqa: E402
 
 from src.config import ensure_directories, get_config, resolve_path  # noqa: E402
-from src.data import loader  # noqa: E402
-from src.data.cleaning import remediation_summary  # noqa: E402
+from src.data.scms import parsing_report  # noqa: E402
 from src.logger import get_logger  # noqa: E402
 from src.quality import assessment as dq  # noqa: E402
 
 log = get_logger("scripts.run_quality_report")
 
-DATASETS = ["batches", "shipments", "inventory", "demand", "drug200"]
+DATASETS = ["scms", "indian_medicines", "drug200"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,7 +58,7 @@ def main() -> int:
     targets = [args.dataset] if args.dataset else DATASETS
 
     print(f"\n{cfg.project.name} v{cfg.project.version}")
-    print("Data quality audit - profiling the raw (bronze) extract\n")
+    print("Data quality audit - three real datasets, as published\n")
 
     scoreboard = dq.assess_all(targets, raw=True)
     print("=" * 96)
@@ -64,24 +68,20 @@ def main() -> int:
 
     uplift = dq.quality_uplift(targets)
     print("\n" + "=" * 96)
-    print("CLEANING UPLIFT (bronze -> silver)")
+    print("EFFECT OF TYPE-AWARE PARSING (as published -> interpreted)")
     print("=" * 96)
     print(uplift[["dataset", "raw_score", "raw_grade", "clean_score",
                   "clean_grade", "uplift"]].to_string(index=False))
+    print("\nNote: a NEGATIVE uplift is expected on scms. Parsing replaces")
+    print("unparseable text with honest nulls, so generic completeness falls.")
+    print("The generic score rewards a file for holding non-null garbage, which")
+    print("is precisely the limitation this report exists to expose.")
 
-    remediation = loader.remediation_log()
-    summary = remediation_summary(remediation)
+    parsing = parsing_report()
     print("\n" + "=" * 96)
-    print("REMEDIATION ACTIONS APPLIED")
+    print("SCMS FIELD USABILITY (what a completeness check cannot see)")
     print("=" * 96)
-    print(summary.to_string(index=False) if len(summary) else "  none")
-
-    injected = loader.injected_defect_log()
-    if len(injected):
-        print("\n" + "=" * 96)
-        print("DEFECTS INJECTED BY THE GENERATOR (expected findings)")
-        print("=" * 96)
-        print(injected.sort_values("rows_affected", ascending=False).to_string(index=False))
+    print(parsing.to_string(index=False))
 
     if args.no_excel:
         print(f"\nAudit complete in {time.perf_counter() - started:.1f}s\n")
@@ -93,10 +93,8 @@ def main() -> int:
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         scoreboard.to_excel(writer, sheet_name="Scoreboard", index=False)
-        uplift.to_excel(writer, sheet_name="Cleaning Uplift", index=False)
-        summary.to_excel(writer, sheet_name="Remediation", index=False)
-        if len(injected):
-            injected.to_excel(writer, sheet_name="Injected Defects", index=False)
+        uplift.to_excel(writer, sheet_name="Parsing Effect", index=False)
+        parsing.to_excel(writer, sheet_name="SCMS Field Usability", index=False)
 
         # One detail sheet per dataset. Sheet names are capped at 31 characters
         # by the xlsx format, so the dataset name is truncated defensively.

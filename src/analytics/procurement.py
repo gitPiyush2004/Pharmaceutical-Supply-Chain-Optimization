@@ -83,66 +83,10 @@ def _service_metrics(frame: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # The real procurement funnel
 # ---------------------------------------------------------------------------
-def procurement_funnel(scms: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Milestone coverage across the real procurement pipeline.
-
-    Unlike a manufacturing funnel, this is not a volume funnel - no units are
-    physically lost between a price quote and a delivery. What *is* lost is
-    **traceability**: each milestone is recorded for a different share of line
-    items, and the drop-off measures how much of the process is actually
-    auditable end to end.
-
-    That is a real and reportable finding: only 44% of line items carry a vendor
-    purchase order date, because more than half are fulfilled from regional
-    distribution centre stock that bypasses vendor ordering entirely.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Columns ``stage_order``, ``stage``, ``line_items_recorded``,
-        ``coverage_pct``, ``structural_gap``, ``missing``, ``interpretation``.
-    """
-    df = _resolve(scms)
-    total = len(df)
-
-    milestones = [
-        ("Price Quote Sent", "date_pq_sent"),
-        ("PO Sent to Vendor", "date_po_sent"),
-        ("Scheduled for Delivery", "date_scheduled"),
-        ("Delivered to Client", "date_delivered"),
-        ("Delivery Recorded", "date_recorded"),
-    ]
-
-    rows: list[dict] = []
-    for order, (stage, column) in enumerate(milestones, start=1):
-        reason = df.get(f"{column}_reason")
-        recorded = int(df[column].notna().sum())
-        structural = int((reason == "structural").sum()) if reason is not None else 0
-        missing = int((reason == "missing").sum()) if reason is not None else 0
-
-        if structural and stage == "PO Sent to Vendor":
-            interpretation = (f"{structural:,} fulfilled from RDC stock - no vendor "
-                              "purchase order exists")
-        elif structural:
-            interpretation = f"{structural:,} predate the current process"
-        elif missing:
-            interpretation = f"{missing:,} genuinely unrecorded"
-        else:
-            interpretation = "fully recorded"
-
-        rows.append({
-            "stage_order": order, "stage": stage,
-            "line_items_recorded": recorded,
-            "coverage_pct": round(100 * recorded / total, 2),
-            "structural_gap": structural, "missing": missing,
-            "interpretation": interpretation,
-        })
-
-    funnel = pd.DataFrame(rows)
-    log.info("Procurement funnel over %d real line items | PO coverage %.1f%%",
-             total, funnel.loc[funnel["stage"] == "PO Sent to Vendor", "coverage_pct"].iloc[0])
-    return funnel
-
+# Milestone coverage used to live here as `procurement_funnel`. It moved to
+# src/analytics/pipeline.py as `traceability`, which is the honest name for it -
+# coverage runs 74% -> 44% -> 100%, and calling a non-monotone series a funnel
+# invites the reader to see sequential loss where there is none.
 
 def lead_time_breakdown(scms: pd.DataFrame | None = None) -> pd.DataFrame:
     """Distribution of each measurable interval in the procurement pipeline.
@@ -214,7 +158,7 @@ def vendor_scorecard(scms: pd.DataFrame | None = None,
     scorecard = _service_metrics(df, ["vendor"])
     scorecard = scorecard[scorecard["shipments"] >= threshold].copy()
 
-    tiers = get_config().shipments.supplier_tiers
+    tiers = _cfg().vendor_tiers
     scorecard["performance_tier"] = np.select(
         [scorecard["on_time_pct"] >= tiers["Preferred"],
          scorecard["on_time_pct"] >= tiers["Approved"]],
@@ -404,7 +348,7 @@ def scms_kpis(scms: pd.DataFrame | None = None) -> dict:
 
 
 __all__ = [
-    "procurement_funnel", "lead_time_breakdown", "vendor_scorecard",
+    "lead_time_breakdown", "vendor_scorecard",
     "country_performance", "region_performance", "mode_performance",
     "product_performance", "manufacturing_site_analysis", "freight_economics",
     "delivery_trend", "delay_distribution", "scms_kpis",

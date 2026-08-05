@@ -1,12 +1,20 @@
 """
 Machine learning page.
 
-Two models, both trained through the same reproducible pipeline:
+Two models, both on real data, both trained through the same reproducible
+pipeline and selected under identical rules so their numbers are comparable:
 
 1. **Drug Classification** - patient-level prescribing recommendation on the
-   Kaggle ``drug200`` dataset.
-2. **Batch Risk** - stability risk tier for a manufactured batch, from storage
-   and process telemetry.
+   Kaggle ``drug200`` dataset (200 patients, 5 classes).
+2. **Late Delivery** - probability that a planned shipment misses its scheduled
+   date, on the USAID SCMS history (10,324 shipments).
+
+A third model predicting batch stability risk used to sit here. It was trained on
+simulated telemetry, because no public dataset carries per-batch storage
+temperature or potency - I checked Kaggle, openFDA, data.gov.in, CDSCO, Mendeley
+and Zenodo, and the one promising candidate turned out to be the IndPenSim
+simulation. Rather than keep a model whose training data I had generated myself,
+it is gone. Two real models beat three when one is circular.
 
 Every number shown here is read from the persisted metadata written by
 ``scripts/train_models.py``; nothing is retrained in the browser.
@@ -35,17 +43,14 @@ from src.viz.theme import fmt_pct
 page_setup(
     title="Machine Learning Models",
     icon="🤖",
-    subtitle="Drug classification and batch risk prediction, with full evaluation evidence",
+    subtitle="Drug classification and late-delivery prediction, with the full "
+             "evaluation evidence behind each number",
 )
 
 MODELS = {
-    "Drug Classification (real clinical data)": "drug_classification",
-    "Batch Risk (simulated telemetry)": "batch_risk",
-    "Late Delivery (real SCMS data)": "late_delivery",
+    "Drug Classification (Kaggle drug200)": "drug_classification",
+    "Late Delivery (USAID SCMS)": "late_delivery",
 }
-
-#: Which models are trained on genuine observations rather than the digital twin.
-REAL_DATA_MODELS = {"drug_classification", "late_delivery"}
 
 
 @st.cache_data(show_spinner=False)
@@ -73,19 +78,12 @@ key = available[choice]
 meta = _summary(key)
 metrics = meta["metrics"]
 
-if key in REAL_DATA_MODELS:
-    source = ("Kaggle drug200 clinical dataset (200 patients)"
-              if key == "drug_classification"
-              else "USAID SCMS delivery history (10,324 real shipments, 43 countries)")
-    callout(f"Trained on **real data**: {source}.", kind="success",
-            title="Data provenance")
-else:
-    callout(
-        "Trained on the **simulated** digital twin. No public dataset carries "
-        "per-batch storage telemetry, so this model demonstrates the pipeline "
-        "rather than a finding about a real operation.",
-        kind="warning", title="Data provenance",
-    )
+source = ("Kaggle drug200 clinical dataset - 200 patients, 5 drug classes"
+          if key == "drug_classification"
+          else "USAID SCMS delivery history - 10,324 real shipments to 43 countries, "
+               "2006-2015")
+callout(f"Trained on **real data**: {source}.", kind="success",
+        title="Data provenance")
 
 # ---------------------------------------------------------------------------
 # Headline metrics
@@ -185,15 +183,6 @@ with tabs[4]:
             "deterministically, and blood pressure and cholesterol separate the "
             "remaining four drugs. The model recovering that structure is a "
             "correctness check, not a coincidence."
-        )
-    elif key == "batch_risk":
-        insight(
-            "**Thermal load** - the engineered interaction of excess temperature "
-            "and exposure time - is the strongest single predictor, ahead of raw "
-            "storage duration. That is the expected physics: degradation depends "
-            "on temperature *and* time together, not either alone. Cycle time and "
-            "QA delay follow, which is why compressing quality testing improves "
-            "stability as well as throughput."
         )
     else:
         insight(
@@ -312,45 +301,6 @@ elif key == "late_delivery":
         "to tune here."
     )
 
-else:
-    c1, c2, c3, c4 = st.columns(4)
-    temp = c1.number_input("Storage Temp (°C)", 1.0, 45.0, 25.0, 0.5)
-    humidity = c2.number_input("Humidity (%RH)", 10.0, 95.0, 55.0, 1.0)
-    duration = c3.number_input("Storage Duration (days)", 1, 400, 60, 1)
-    cycle = c4.number_input("Total Cycle Time (days)", 10, 400, 95, 1)
-    c5, c6, c7, c8 = st.columns(4)
-    qa_delay = c5.number_input("QA Delay (days)", 1, 90, 19, 1)
-    reliability = c6.number_input("Supplier Reliability", 0.50, 1.0, 0.92, 0.01)
-    drug_code = c7.selectbox("Product", ["DrugY", "DrugX", "DrugA", "DrugB", "DrugC"])
-    region = c8.selectbox("Region", ["North America", "Europe", "Asia-Pacific",
-                                     "Latin America", "Middle East & Africa"])
-    c9, c10 = st.columns(2)
-    cold = c9.selectbox("Cold Chain", [0, 1],
-                        format_func=lambda v: "Yes (2-8°C)" if v else "No (ambient)")
-    shelf = c10.number_input("Shelf Life (months)", 6, 60, 24, 1)
-
-    if st.button("Predict batch risk", type="primary"):
-        result = predict.predict_batch_risk(
-            storage_temp_c=temp, storage_humidity_pct=humidity,
-            storage_duration_days=duration, total_cycle_time_days=cycle,
-            qa_delay_days=qa_delay, supplier_reliability=reliability,
-            is_cold_chain=cold, shelf_life_months=shelf,
-            drug_code=drug_code, region=region)
-        left, right = st.columns([1, 2], gap="large")
-        with left:
-            st.markdown(f"### {result['prediction']} Risk")
-            st.markdown(verdict_badge(result["prediction"]), unsafe_allow_html=True)
-            st.metric("Confidence", fmt_pct(result["confidence"] * 100, 1))
-        with right:
-            probs = pd.DataFrame(
-                {"risk_tier": list(result["probabilities"]),
-                 "probability": list(result["probabilities"].values())})
-            chart(charts.bar_chart(probs, x="risk_tier", y="probability",
-                                   title="Risk Tier Probabilities",
-                                   text_format=".3f", height=300))
-        callout(result["explanation"], kind="warning" if result["prediction"] == "High"
-                else "insight", title="Risk drivers")
-
 # ---------------------------------------------------------------------------
 _FEATURE_NOTES = {
     "drug_classification": (
@@ -361,15 +311,6 @@ _FEATURE_NOTES = {
         "threshold.\n"
         "- `age_group`, `na_to_k_band` - banded versions so splits fall on "
         "clinically natural boundaries."
-    ),
-    "batch_risk": (
-        "- `thermal_load` - degrees above the labelled storage limit multiplied by "
-        "exposure days. Degradation depends on temperature and time jointly, so "
-        "the interaction is given to the model explicitly rather than left to be "
-        "discovered.\n"
-        "- `humidity_excess` - relative humidity above the moisture uptake "
-        "threshold.\n"
-        "- `cycle_time_ratio` - cycle time relative to the network median."
     ),
     "late_delivery": (
         "- `scheduled_lead_time_days` - the *planned* quote-to-scheduled interval. "
@@ -403,13 +344,6 @@ _LIMITATIONS = {
         "inside it. The residual error is threshold estimation, which is why the "
         "single test error sits at Na/K 14.64 — the boundary value itself."
     ),
-    "batch_risk": (
-        "Macro F1 of ~0.70 on three imbalanced risk tiers reflects genuine "
-        "irreducible noise: the label depends partly on QA outcomes that are "
-        "stochastic by construction. A higher score would indicate leakage rather "
-        "than skill. This model is also trained on simulated telemetry, so it "
-        "demonstrates method rather than a real finding."
-    ),
     "late_delivery": (
         "Raw accuracy (0.879) sits marginally **below** the majority-class "
         "baseline (0.885), because only 11.5% of real shipments are late. That is "
@@ -435,7 +369,7 @@ serving) → standard scaling for numerics → estimator.
 **Selection.** Stratified {meta['cv_folds']}-fold cross-validation with
 `{meta['cv_scoring']}` as the scoring metric, grid-searched per algorithm. Macro F1
 is used rather than accuracy because the classes are imbalanced and every class
-matters equally. All three models are selected under the same rules, which is what
+matters equally. Both models are selected under the same rules, which is what
 makes their numbers comparable. The test set is touched exactly once, to report.
 
 **Reproducibility.** `random_seed={meta['random_seed']}` throughout;

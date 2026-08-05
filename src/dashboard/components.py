@@ -294,12 +294,16 @@ def sidebar_filters(data: pd.DataFrame, fields: list[str],
         The filtered frame (a copy).
     """
     labels = {
-        "region": "Region", "drug_code": "Product", "brand_name": "Brand",
-        "supplier_name": "Supplier", "warehouse_id": "Warehouse",
-        "warehouse_name": "Warehouse", "carrier": "Carrier",
-        "transport_mode": "Transport Mode", "therapeutic_area": "Therapeutic Area",
-        "qa_result": "QA Result", "batch_risk_label": "Risk Tier", "leg": "Shipment Leg",
-        "abc_class": "ABC Class", "form": "Dosage Form",
+        # SCMS
+        "region": "Region", "country": "Destination Country", "vendor": "Vendor",
+        "shipment_mode": "Transport Mode", "fulfil_via": "Fulfilment Route",
+        "product_group": "Product Group", "sub_classification": "Sub-Classification",
+        "managed_by": "Managed By", "inco_term": "INCO Term",
+        "manufacturing_site": "Manufacturing Site", "era": "Period",
+        "first_line_designation": "First-Line Designation",
+        # Indian medicine master
+        "manufacturer": "Manufacturer", "pack_form": "Pack Form",
+        "price_band": "Price Band",
     }
     st.sidebar.markdown(f"### {title}")
     filtered = data.copy()
@@ -333,10 +337,13 @@ def sidebar_about() -> None:
 
 *{cfg.project.name}*
 
-**Data layer**
-- `drug200.csv` - Kaggle clinical dataset (200 patients)
-- Supply chain digital twin - seeded generator, reproducible with
-  `random_seed={cfg.project.random_seed}`
+**Three real datasets**
+- `drug200` - Kaggle clinical dataset (200 patients)
+- USAID SCMS - 10,324 real shipments, 43 countries
+- Indian medicine master - 253,973 products
+
+No simulated data. Deterministic under
+`random_seed={cfg.project.random_seed}`.
 
 Built by {cfg.project.author}
 """

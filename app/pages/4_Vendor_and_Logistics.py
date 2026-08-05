@@ -1,14 +1,15 @@
 """
-Real-World Data page - USAID SCMS delivery history.
+Vendor & Logistics page - USAID SCMS delivery history.
 
-Everything on this page is measured from genuine operational data: 10,324
-shipments of HIV, malaria and antiretroviral commodities to 43 countries between
-2006 and 2015, published by USAID as open data.
+Who delivers, where to, by what mode, and at what freight cost. 10,324 shipments
+of HIV, malaria and antiretroviral commodities to 43 countries between 2006 and
+2015, published by USAID as open data.
 
-The rest of the platform's supply chain pages run on a simulated digital twin,
-because no public dataset carries per-batch storage telemetry or inventory
-snapshots. This page is where the analysis stands on real observations, and it is
-labelled as such throughout.
+The pipeline-level view of the same dataset - the value funnel, interval
+decomposition and milestone traceability - lives on the Delivery Pipeline page.
+This page is about the actors rather than the process: vendor scorecards,
+destination performance, and the cost-versus-service trade-off between transport
+modes.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ from pathlib import Path
 # import - means this page runs identically under all three.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import pandas as pd
 import streamlit as st
 
 from src.dashboard.components import (callout, chart, download_button, insight,
@@ -34,9 +34,10 @@ from src.viz import charts
 from src.viz.theme import fmt_currency, fmt_days, fmt_pct, fmt_units
 
 page_setup(
-    title="Real-World Data: USAID SCMS",
+    title="Vendor & Logistics Performance",
     icon="🌍",
-    subtitle="10,324 actual pharmaceutical shipments to 43 countries, 2006-2015",
+    subtitle="Who delivers, where to, by what mode, and at what freight cost "
+             "- across 10,324 real USAID shipments",
 )
 
 
@@ -56,8 +57,7 @@ callout(
     f"**{provenance['name']}** — published by {provenance['publisher']} under the "
     f"{provenance['programme']} programme. {provenance['records']:,} line items, "
     f"{provenance['coverage']}. Licence: {provenance['licence']}. "
-    "Every figure on this page is measured from these records; nothing here is "
-    "simulated.",
+    "Every figure on this page is counted from these records.",
     kind="success", title="Real operational data",
 )
 
@@ -129,35 +129,15 @@ insight(
 )
 
 # ---------------------------------------------------------------------------
-section(
-    "The Real Procurement Funnel",
-    "No units are physically lost between a price quote and a delivery — what is "
-    "lost is traceability. This measures how much of the process is auditable "
-    "end to end.",
+callout(
+    "**Milestone traceability and the value funnel are on the Delivery Pipeline "
+    "page**, so they are not repeated here. The one figure worth carrying across: "
+    "only 44% of line items have a vendor purchase order on record, because the rest "
+    "are filled from regional distribution centre stock that never involves a vendor "
+    "order. That is why the vendor lead-time column below reports its own "
+    "denominator rather than a single programme-wide average.",
+    kind="insight", title="Where the process view lives",
 )
-
-funnel = proc.procurement_funnel(data)
-col1, col2 = st.columns([2, 3], gap="large")
-with col1:
-    chart(charts.bar_chart(funnel, x="stage", y="coverage_pct",
-                           title="Milestone Coverage (%)", orientation="h",
-                           text_format=".1f", height=340))
-with col2:
-    show_table(funnel[["stage", "line_items_recorded", "coverage_pct",
-                       "structural_gap", "missing", "interpretation"]], height=300)
-
-po_coverage = funnel.loc[funnel["stage"] == "PO Sent to Vendor", "coverage_pct"].iloc[0]
-insight(
-    f"Only **{po_coverage:.0f}% of line items carry a vendor purchase order date**. "
-    "That is not a data quality failure — 5,404 shipments were fulfilled from "
-    "regional distribution centre stock, which bypasses vendor ordering entirely. "
-    "Treating those as missing values and imputing them would invent purchase "
-    "orders that never existed. They are excluded from vendor lead-time statistics "
-    "instead, and every lead-time figure on this page reports the denominator it "
-    "actually used."
-)
-
-show_table(proc.lead_time_breakdown(data), height=260)
 
 # ---------------------------------------------------------------------------
 section("Where Performance Varies")
@@ -327,11 +307,13 @@ centre stock and never had a vendor purchase order; 2,476 predate the price-quot
 process. These are excluded from the affected statistics rather than imputed, and
 the reason codes in the provenance table above record every such decision.
 
-**What this page does not cover.** SCMS records procurement and logistics, not
-manufacturing. It has no batch quality outcomes, no storage temperature or
-humidity telemetry, and no inventory snapshots. Those analyses run on the
-simulated digital twin elsewhere in the platform, and are labelled as simulated
-wherever they appear.
+**What this dataset does not cover.** SCMS records procurement and logistics, not
+manufacturing. It has no batch quality outcomes, no storage temperature or humidity
+telemetry and no inventory snapshots — so there is no stability or batch-risk
+analysis anywhere in this project. No public dataset carries per-batch storage
+telemetry (Kaggle, openFDA, data.gov.in, CDSCO, Mendeley and Zenodo were all
+checked; the one promising candidate turned out to be a simulation), so rather than
+generate it, those analyses were dropped.
 """)
 
 sidebar_about()

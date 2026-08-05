@@ -74,17 +74,9 @@ CLINICAL_ENGINEERED_NUMERIC: tuple[str, ...] = (
 CLINICAL_ENGINEERED_CATEGORICAL: tuple[str, ...] = ("age_group", "na_to_k_band")
 
 # Feature names produced by :func:`engineer_batch_features`.
-BATCH_ENGINEERED_NUMERIC: tuple[str, ...] = (
-    "temp_excursion_c",
-    "humidity_excess",
-    "thermal_load",
-    "cycle_time_ratio",
-)
-
 # Batch columns that are categorical in the config feature list; everything
 # else in that list is numeric (``is_cold_chain`` is already a 0/1 indicator and
 # is left numeric so tree splits can use it directly).
-_BATCH_CATEGORICAL: tuple[str, ...] = ("drug_code", "region")
 
 
 # ---------------------------------------------------------------------------
@@ -250,102 +242,6 @@ def engineer_clinical_features(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Feature engineering - batch risk
 # ---------------------------------------------------------------------------
-def engineer_batch_features(
-    df: pd.DataFrame, median_cycle_time: float | None = None
-) -> pd.DataFrame:
-    """Derive storage-stress features for the batch risk model.
-
-    Raw storage temperature is not comparable across products: 8 degC is a
-    breach for an ambient tablet's neighbour on the shelf but the normal
-    condition for a cold-chain biologic. These features re-express the raw
-    conditions relative to each product's *labelled* storage condition, which is
-    what actually determines degradation.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Batch frame containing at least ``storage_temp_c``,
-        ``storage_humidity_pct``, ``storage_duration_days``,
-        ``total_cycle_time_days`` and ``is_cold_chain``.
-    median_cycle_time : float, optional
-        Median end-to-end cycle time used as the denominator of
-        ``cycle_time_ratio``. Computed from ``df`` when omitted. Training passes
-        ``None`` and persists the resulting value; serving passes the persisted
-        value back so a single-batch prediction is scaled identically.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Copy of the input with the engineered columns appended.
-
-    Raises
-    ------
-    ValueError
-        If a required source column is absent, or if the supplied/derived
-        median cycle time is not strictly positive.
-    """
-    cfg = get_config()
-    batch_fe = cfg.ml.feature_engineering.batch
-    stability = cfg.stability
-
-    required = {
-        "storage_temp_c",
-        "storage_humidity_pct",
-        "storage_duration_days",
-        "total_cycle_time_days",
-        "is_cold_chain",
-    }
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(
-            f"Cannot engineer batch features, missing column(s): {sorted(missing)}"
-        )
-
-    out = df.copy()
-
-    # Degrees above the *labelled* storage limit for this product. Cold-chain
-    # items are licensed for 2-8 degC, everything else for controlled room
-    # temperature, so the reference is per-row rather than global. Clipped at
-    # zero: storing colder than the limit is not an excursion for these forms.
-    cold_limit = float(batch_fe.cold_chain_max_temp_c)
-    ambient_limit = float(stability.reference_temp_ambient)
-    limit = np.where(out["is_cold_chain"].astype(float) > 0, cold_limit, ambient_limit)
-    out["temp_excursion_c"] = (out["storage_temp_c"].astype(float) - limit).clip(lower=0.0)
-
-    # Relative humidity above the moisture-uptake threshold. Below that point
-    # hygroscopic uptake is negligible, so only the excess carries signal.
-    out["humidity_excess"] = (
-        out["storage_humidity_pct"].astype(float) - float(stability.humidity_threshold)
-    ).clip(lower=0.0)
-
-    # Cumulative heat exposure. Degradation kinetics integrate temperature over
-    # time: a 10-degree excursion for two days and a 1-degree excursion for
-    # twenty days are not the same batch. The product is the first-order
-    # (Arrhenius-flavoured) proxy for that integral.
-    out["thermal_load"] = out["temp_excursion_c"] * out["storage_duration_days"].astype(float)
-
-    # Cycle time relative to the network median. An absolute day count conflates
-    # "this lane is naturally long" with "this batch was unusually slow"; the
-    # ratio isolates the second, which is what consumes remaining shelf life.
-    if median_cycle_time is None:
-        median_cycle_time = float(out["total_cycle_time_days"].astype(float).median())
-    median_cycle_time = float(median_cycle_time)
-    if not np.isfinite(median_cycle_time) or median_cycle_time <= 0:
-        raise ValueError(
-            f"median_cycle_time must be a positive finite number, got {median_cycle_time!r}"
-        )
-    out["cycle_time_ratio"] = out["total_cycle_time_days"].astype(float) / median_cycle_time
-
-    log.info(
-        "engineer_batch_features: added %s | median cycle time %.1f d | "
-        "%.1f%% of rows show a temperature excursion",
-        list(BATCH_ENGINEERED_NUMERIC),
-        median_cycle_time,
-        100.0 * float((out["temp_excursion_c"] > 0).mean()),
-    )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Feature specifications
 # ---------------------------------------------------------------------------
@@ -364,23 +260,6 @@ def clinical_feature_columns() -> tuple[list[str], list[str]]:
     cfg = get_config().ml.drug_classification
     numeric = list(cfg.numeric_features) + list(CLINICAL_ENGINEERED_NUMERIC)
     categorical = list(cfg.categorical_features) + list(CLINICAL_ENGINEERED_CATEGORICAL)
-    return numeric, categorical
-
-
-def batch_feature_columns() -> tuple[list[str], list[str]]:
-    """Return the (numeric, categorical) model input columns for MODEL 2.
-
-    Returns
-    -------
-    tuple of (list of str, list of str)
-        Numeric feature names, then categorical feature names. The split is
-        driven by ``ml.batch_risk.features`` in the config; ``drug_code`` and
-        ``region`` are the categorical members of that list.
-    """
-    configured = list(get_config().ml.batch_risk.features)
-    categorical = [c for c in configured if c in _BATCH_CATEGORICAL]
-    numeric = [c for c in configured if c not in _BATCH_CATEGORICAL]
-    numeric += list(BATCH_ENGINEERED_NUMERIC)
     return numeric, categorical
 
 
@@ -546,13 +425,10 @@ def normalise_categorical(value: str, allowed: Iterable[str], field: str) -> str
 __all__ = [
     "clean_clinical",
     "engineer_clinical_features",
-    "engineer_batch_features",
     "clinical_feature_columns",
-    "batch_feature_columns",
     "build_preprocessor",
     "split_data",
     "normalise_categorical",
     "CLINICAL_ENGINEERED_NUMERIC",
     "CLINICAL_ENGINEERED_CATEGORICAL",
-    "BATCH_ENGINEERED_NUMERIC",
 ]

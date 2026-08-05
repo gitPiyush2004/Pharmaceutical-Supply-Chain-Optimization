@@ -1,7 +1,0 @@
-warehouse_id,warehouse_name,region,country,capacity_units,temp_controlled
-WH-NA-01,Newark DC,North America,USA,620000,1
-WH-NA-02,Memphis Hub,North America,USA,480000,1
-WH-EU-01,Rotterdam DC,Europe,Netherlands,540000,1
-WH-AP-01,Singapore DC,Asia-Pacific,Singapore,400000,1
-WH-LA-01,Sao Paulo DC,Latin America,Brazil,215000,0
-WH-ME-01,Dubai DC,Middle East & Africa,UAE,150000,0

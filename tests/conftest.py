@@ -1,9 +1,9 @@
 """
 Shared pytest fixtures.
 
-Data is loaded once per session: the generator is deterministic, so there is no
-reason to rebuild it per test, and the suite stays fast enough to run on every
-commit.
+Every dataset is loaded once per session. Two of the three are downloaded on first
+use and cached under ``data/external``, so a session-scoped fixture is the
+difference between one download and one per test.
 """
 
 from __future__ import annotations
@@ -27,41 +27,41 @@ def cfg():
 
 @pytest.fixture(scope="session", autouse=True)
 def _datasets_available():
-    """Ensure the data layer exists before any test runs."""
+    """Download and cache the two external datasets before any test runs.
+
+    A no-op once they are on disk, so only the first run needs a network.
+    """
     loader.ensure_datasets()
 
 
 @pytest.fixture(scope="session")
-def batches():
-    """Cleaned (silver) batch funnel fact table."""
-    return loader.load_batches()
-
-
-@pytest.fixture(scope="session")
-def raw_batches():
-    """Raw (bronze) batch extract, defects intact."""
-    return loader.load_raw_table("batches")
-
-
-@pytest.fixture(scope="session")
-def shipments():
-    return loader.load_shipments()
-
-
-@pytest.fixture(scope="session")
-def inventory_snapshots():
-    return loader.load_inventory()
-
-
-@pytest.fixture(scope="session")
-def demand():
-    return loader.load_demand()
-
-
-@pytest.fixture(scope="session")
 def clinical():
-    """Kaggle drug200 clinical dataset."""
+    """Kaggle drug200 clinical dataset - 200 patients, 5 drug classes."""
     return loader.load_clinical()
+
+
+@pytest.fixture(scope="session")
+def scms():
+    """USAID SCMS delivery history, parsed and interpreted."""
+    return loader.load_scms()
+
+
+@pytest.fixture(scope="session")
+def scms_raw():
+    """USAID SCMS delivery history exactly as published."""
+    return loader.load_scms_raw()
+
+
+@pytest.fixture(scope="session")
+def indian_medicines():
+    """Indian medicine product master, normalised - 253,973 products."""
+    return loader.load_indian_medicines()
+
+
+@pytest.fixture(scope="session")
+def indian_medicines_raw():
+    """Indian medicine product master exactly as published."""
+    return loader.load_indian_medicines_raw()
 
 
 @pytest.fixture(scope="session")
@@ -71,4 +71,4 @@ def models_available() -> bool:
 
     models = resolve_path(get_config().paths.models)
     return all((models / f"{name}_model.joblib").exists()
-               for name in ("drug_classification", "batch_risk"))
+               for name in ("drug_classification", "late_delivery"))

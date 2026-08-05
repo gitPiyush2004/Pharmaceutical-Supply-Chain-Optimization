@@ -10,7 +10,6 @@ trained from this data.
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from src.analytics import procurement as proc
@@ -215,13 +214,20 @@ class TestDerivedMetrics:
 
 # ---------------------------------------------------------------------------
 class TestProcurementAnalytics:
-    def test_funnel_covers_all_five_milestones(self, scms):
-        funnel = proc.procurement_funnel(scms)
-        assert len(funnel) == 5
-        assert funnel["coverage_pct"].between(0, 100).all()
+    def test_traceability_covers_all_five_milestones(self, scms):
+        """Milestone coverage moved from `procurement_funnel` to
+        `pipeline.traceability`, which is the honest name for a non-monotone
+        series."""
+        from src.analytics import pipeline as pl
+
+        trace = pl.traceability(scms)
+        assert len(trace) == 5
+        assert trace["coverage_pct"].between(0, 100).all()
         # The three delivery milestones are fully recorded.
-        complete = funnel[funnel["stage"].isin(
-            ["Scheduled for Delivery", "Delivered to Client", "Delivery Recorded"])]
+        complete = trace[trace["stage"].isin(
+            ["Delivery scheduled", "Delivered to client",
+             "Delivery recorded in system"])]
+        assert len(complete) == 3
         assert (complete["coverage_pct"] == 100.0).all()
 
     def test_lead_time_reports_its_denominator(self, scms):

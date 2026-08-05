@@ -1,44 +1,58 @@
 """
-Statistical A/B testing for supply chain operational interventions.
+Statistical testing toolkit - the tests themselves, with no data of their own.
 
-Business framing
-----------------
-Operations teams are constantly asked to approve capital projects - automate
-the warehouse, put process analytical technology on the QC line, buy an AI
-routing engine. Each is pitched with an improvement claim. This module answers
-the only question that matters before signing: **is the observed improvement
-real, or is it noise?**
+What this module is, and is not
+-------------------------------
+This is the **statistics layer**: two-proportion z-tests, chi-square tests of
+independence, Welch's t-test, Mann-Whitney U, effect sizes and power analysis.
+Every function takes counts or Series and returns a result dictionary. It reads no
+data and knows nothing about pharmaceuticals.
 
-Each experiment randomises production batches (or shipments) into a control arm
-running the incumbent process and a treatment arm running the intervention, then
-evaluates two metrics:
+The **comparisons** - which groups get compared, on what metric, and what
+confounds that comparison - live in :mod:`src.analytics.experiments` (supply chain)
+and :mod:`src.analytics.market` (Indian product master). Both read real data.
 
-* a **primary binary metric** - did the unit succeed? (batch released, shipment
-  on time, batch within potency spec). Tested with a two-proportion z-test and
-  cross-checked with a chi-square test of independence.
-* a **secondary continuous metric** - how long did it take? Tested with
-  Welch's t-test, which does not assume equal variances between arms.
+That split is deliberate. An earlier version of this module carried a catalogue of
+four operational interventions with hard-coded control and treatment rates, and
+generated Bernoulli draws around them. It produced clean, significant results
+because the effect had been written into the configuration file. The whole exercise
+was circular, so it is gone. Every p-value the platform now reports comes from a
+comparison between groups that exist in a published dataset.
 
-Statistical significance is necessary but not sufficient, so every result is
-also scored on **practical significance** (is the lift big enough to be worth
-the capital?) and translated into an **annualised dollar impact** before a
-recommendation is issued.
+What is lost by that, honestly
+------------------------------
+Randomisation. These are **observational comparisons**, not randomised
+experiments, so a difference between two groups licenses no causal claim on its
+own. Direct Drop shipments arrive on time 94.7% of the time against 82.9% for
+regional-distribution-centre stock, but nobody randomised a shipment into a
+fulfilment route - the two groups differ in destination, era and commodity as well.
+This is exactly why :func:`src.analytics.experiments.stratified_comparison` exists
+and why every comparison carries a stated confound. Naming the confound is the
+analytical work; the p-value is the easy part.
 
 Why both a z-test and a chi-square test
 ---------------------------------------
-For a 2x2 design they are mathematically equivalent - the chi-square statistic
-is the square of the z statistic, and the p-values agree. Reporting both is a
+For a 2x2 design they are mathematically equivalent - the chi-square statistic is
+the square of the z statistic, and the p-values agree. Reporting both is a
 deliberate consistency check: if they ever disagree, the contingency table was
 built wrong. The z-test additionally yields a signed, directional confidence
-interval on the difference in proportions, which is what the business needs.
+interval on the difference in proportions, which is what a decision needs.
+
+Choosing between a mean-based and a rank-based test
+--------------------------------------------------
+:func:`compare_continuous` runs Welch **and** Mann-Whitney, measures the skew, and
+states which result to quote against a configured threshold. This is not a
+formality: on SCMS freight ratios Welch returns p = 0.44 where Mann-Whitney returns
+p = 6.0e-10 on the same comparison, and on delivery delay by era the disagreement
+runs the *other* way. See that function's docstring for both cases and why they need
+opposite readings.
 
 Example
 -------
->>> from src.analytics.ab_testing import run_experiment, list_experiments
->>> list_experiments()
->>> result = run_experiment("qa_automation", sample_size=2000)
->>> result["recommendation"]["verdict"]
-'ADOPT'
+>>> from src.analytics.ab_testing import two_proportion_z_test
+>>> r = two_proportion_z_test(4479, 5404, 4661, 4920)   # RDC versus Direct Drop
+>>> f"{r['absolute_diff_pp']:+.2f}pp, p={r['p_value']:.2e}"
+'+11.89pp, p=7.53e-80'
 """
 
 from __future__ import annotations
@@ -50,149 +64,46 @@ from statsmodels.stats.power import NormalIndPower
 from statsmodels.stats.proportion import proportion_confint, proportions_ztest
 
 from src.config import get_config
-from src.data import loader
 from src.logger import get_logger
 
 log = get_logger(__name__)
 
-#: Minimum relative lift considered worth the capital and change-management
-#: cost of an operational intervention. Below this, a statistically significant
-#: result is still a "do not adopt" - this is what stops teams chasing noise.
+#: Minimum relative improvement worth the capital and change-management cost of an
+#: operational change. Below this, a statistically significant result is still a
+#: "do not act" - this is what stops a large sample turning noise into a project.
 PRACTICAL_SIGNIFICANCE_LIFT_PCT = 1.5
 
-#: Secondary continuous metric: mean and sd of the per-unit processing time in
-#: the control arm, and the reduction the intervention is expected to deliver.
-_CONTINUOUS_METRIC = {
-    "qa_automation":       {"name": "QC Release Time (days)",      "control_mean": 20.0, "sd": 6.0, "treatment_delta": -4.8},
-    "warehouse_automation": {"name": "Pick-to-Dispatch Time (hrs)", "control_mean": 14.5, "sd": 4.2, "treatment_delta": -3.6},
-    "route_optimization":  {"name": "Transit Time (days)",         "control_mean": 6.4,  "sd": 2.6, "treatment_delta": -0.9},
-    "cold_chain_iot":      {"name": "Excursion Response Time (hrs)", "control_mean": 9.1, "sd": 3.4, "treatment_delta": -5.2},
-}
+
+def _alpha(override: float | None = None) -> float:
+    """Resolve the significance level from config unless explicitly overridden."""
+    return float(get_config().ab_testing.alpha if override is None else override)
+
+
+def _skew_limit() -> float:
+    """Absolute skewness above which a mean-based test stops being trustworthy."""
+    return float(get_config().ab_testing.skew_limit)
+
+
+#: Module-level view of the configured skew threshold, for display and tests.
+SKEW_LIMIT: float = float(get_config().ab_testing.skew_limit)
 
 
 # ---------------------------------------------------------------------------
-# Experiment catalogue
-# ---------------------------------------------------------------------------
-def list_experiments() -> pd.DataFrame:
-    """Return the catalogue of available operational interventions.
-
-    Returns
-    -------
-    pd.DataFrame
-        ``key``, ``name``, ``metric``, ``control_rate``, ``treatment_rate``,
-        ``expected_lift_pct``, ``description``.
-    """
-    cfg = get_config().ab_testing
-    rows = []
-    for key, spec in cfg.experiments.items():
-        lift = 100.0 * (spec.treatment_rate - spec.control_rate) / spec.control_rate
-        rows.append({
-            "key": key,
-            "name": spec.name,
-            "metric": spec.metric,
-            "control_rate": spec.control_rate,
-            "treatment_rate": spec.treatment_rate,
-            "expected_lift_pct": round(lift, 2),
-            "description": " ".join(str(spec.description).split()),
-        })
-    return pd.DataFrame(rows)
-
-
-def _experiment_spec(key: str):
-    """Look up one experiment definition, with a helpful error if unknown."""
-    cfg = get_config().ab_testing
-    if key not in cfg.experiments:
-        raise KeyError(f"Unknown experiment '{key}'. Available: {sorted(cfg.experiments)}")
-    return cfg.experiments[key]
-
-
-# ---------------------------------------------------------------------------
-# Experiment data generation
-# ---------------------------------------------------------------------------
-def simulate_experiment(experiment_key: str, sample_size: int | None = None,
-                        seed: int | None = None,
-                        treatment_rate_override: float | None = None) -> pd.DataFrame:
-    """Generate subject-level randomised experiment data.
-
-    Each subject is one production batch (or shipment) assigned 50/50 to
-    control or treatment. Randomisation is what licenses a causal reading of
-    the difference between arms.
-
-    Parameters
-    ----------
-    experiment_key
-        Key from :func:`list_experiments`.
-    sample_size
-        Total subjects across both arms. Defaults to
-        ``config.ab_testing.default_sample_size``.
-    seed
-        Random seed. Defaults to the project seed for reproducibility.
-    treatment_rate_override
-        Replaces the configured treatment rate. Used by the dashboard slider so
-        a user can explore "what if the intervention only delivered X?".
-
-    Returns
-    -------
-    pd.DataFrame
-        One row per subject: ``subject_id``, ``arm``, ``success`` (0/1),
-        ``processing_time``, ``region``, ``drug_code``.
-    """
-    cfg = get_config()
-    spec = _experiment_spec(experiment_key)
-    n = int(sample_size or cfg.ab_testing.default_sample_size)
-    rng = np.random.default_rng(cfg.project.random_seed if seed is None else seed)
-
-    control_rate = float(spec.control_rate)
-    treatment_rate = float(spec.treatment_rate if treatment_rate_override is None
-                           else treatment_rate_override)
-
-    # Balanced 50/50 assignment - equal arms maximise power for a fixed n.
-    n_control = n // 2
-    n_treatment = n - n_control
-    arm = np.array(["Control"] * n_control + ["Treatment"] * n_treatment)
-
-    success = np.concatenate([
-        rng.binomial(1, control_rate, n_control),
-        rng.binomial(1, treatment_rate, n_treatment),
-    ])
-
-    continuous = _CONTINUOUS_METRIC.get(
-        experiment_key, {"control_mean": 10.0, "sd": 3.0, "treatment_delta": -1.0})
-    processing_time = np.concatenate([
-        rng.normal(continuous["control_mean"], continuous["sd"], n_control),
-        rng.normal(continuous["control_mean"] + continuous["treatment_delta"],
-                   continuous["sd"], n_treatment),
-    ]).clip(min=0.1)
-
-    # Strata are carried through so the dashboard can check that the treatment
-    # effect is consistent across segments rather than driven by one region.
-    frame = pd.DataFrame({
-        "subject_id": [f"SUBJ-{i:05d}" for i in range(1, n + 1)],
-        "arm": arm,
-        "success": success,
-        "processing_time": np.round(processing_time, 2),
-        "region": rng.choice(
-            ["North America", "Europe", "Asia-Pacific", "Latin America", "Middle East & Africa"],
-            size=n, p=[0.34, 0.27, 0.22, 0.10, 0.07]),
-        "drug_code": rng.choice(["DrugY", "DrugX", "DrugA", "DrugB", "DrugC"],
-                                size=n, p=[0.455, 0.27, 0.115, 0.08, 0.08]),
-    })
-    # Shuffle so arm order carries no information downstream.
-    return frame.sample(frac=1.0, random_state=int(rng.integers(0, 10_000))).reset_index(drop=True)
-
-
-# ---------------------------------------------------------------------------
-# Statistical tests
+# Binary outcomes
 # ---------------------------------------------------------------------------
 def two_proportion_z_test(successes_control: int, n_control: int,
                           successes_treatment: int, n_treatment: int,
                           alpha: float | None = None) -> dict:
     """Two-proportion z-test with a confidence interval on the difference.
 
+    "Control" and "treatment" are naming conventions inherited from experimental
+    design. On observational data they simply mean *baseline group* and
+    *comparison group* - the arithmetic is identical, the causal licence is not.
+
     Parameters
     ----------
     successes_control, n_control, successes_treatment, n_treatment
-        Event counts and sample sizes per arm.
+        Event counts and sample sizes per group.
     alpha
         Significance level. Defaults to ``config.ab_testing.alpha``.
 
@@ -201,10 +112,9 @@ def two_proportion_z_test(successes_control: int, n_control: int,
     dict
         ``p_control``, ``p_treatment``, ``absolute_diff``, ``relative_lift_pct``,
         ``z_statistic``, ``p_value``, ``ci_lower``, ``ci_upper``, ``alpha``,
-        ``significant``, plus per-arm Wilson confidence intervals.
+        ``significant``, plus per-group Wilson confidence intervals.
     """
-    cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    alpha = _alpha(alpha)
 
     p_control = successes_control / n_control if n_control else 0.0
     p_treatment = successes_treatment / n_treatment if n_treatment else 0.0
@@ -243,16 +153,22 @@ def two_proportion_z_test(successes_control: int, n_control: int,
     }
 
 
-def chi_square_test(data: pd.DataFrame, alpha: float | None = None) -> dict:
-    """Chi-square test of independence between arm and outcome.
+def chi_square_test(data: pd.DataFrame, group: str, outcome: str,
+                    alpha: float | None = None) -> dict:
+    """Chi-square test of independence between a grouping and a binary outcome.
 
-    Cross-checks the z-test. For a 2x2 table the two are equivalent
-    (chi2 == z^2), so agreement confirms the contingency table is correct.
+    Works for any number of groups, so it handles the four shipment modes as
+    readily as a two-way split. For a 2x2 table it cross-checks the z-test:
+    ``chi2 == z**2``, so agreement confirms the contingency table is correct.
 
     Parameters
     ----------
     data
-        Subject-level frame with ``arm`` and ``success`` columns.
+        Row-level frame.
+    group
+        Column holding the grouping (e.g. ``shipment_mode``).
+    outcome
+        Column holding the binary outcome (e.g. ``is_late``).
     alpha
         Significance level. Defaults to config.
 
@@ -261,27 +177,29 @@ def chi_square_test(data: pd.DataFrame, alpha: float | None = None) -> dict:
     dict
         ``chi2_statistic``, ``p_value``, ``degrees_of_freedom``, ``cramers_v``
         (effect size), ``contingency_table``, ``expected_frequencies``,
-        ``significant``.
+        ``min_expected_count``, ``expected_counts_adequate``, ``significant``.
     """
-    cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    alpha = _alpha(alpha)
+    frame = data[[group, outcome]].dropna()
+    table = pd.crosstab(frame[group], frame[outcome])
 
-    table = pd.crosstab(data["arm"], data["success"])
     # Yates' continuity correction is disabled deliberately. SciPy applies it to
     # 2x2 tables by default, which would make chi2 != z^2 and break the
-    # cross-check described in the module docstring. It is also known to be
-    # over-conservative at the sample sizes used here (n in the thousands),
-    # where the normal approximation is already excellent.
+    # cross-check described in the module docstring. It is also over-conservative
+    # at the sample sizes used here (n in the thousands), where the normal
+    # approximation is already excellent.
     chi2, p_value, dof, expected = stats.chi2_contingency(table, correction=False)
 
     # Cramer's V normalises chi-square to a 0-1 effect size so results stay
-    # comparable across experiments with different sample sizes.
+    # comparable across comparisons with very different sample sizes.
     n = int(table.values.sum())
     min_dim = min(table.shape) - 1
     cramers_v = np.sqrt(chi2 / (n * min_dim)) if n and min_dim else 0.0
 
     return {
         "test": "Chi-Square Test of Independence",
+        "group": group,
+        "outcome": outcome,
         "chi2_statistic": round(float(chi2), 4),
         "p_value": float(p_value),
         "degrees_of_freedom": int(dof),
@@ -289,39 +207,46 @@ def chi_square_test(data: pd.DataFrame, alpha: float | None = None) -> dict:
         "contingency_table": table,
         "expected_frequencies": pd.DataFrame(
             expected, index=table.index, columns=table.columns).round(1),
+        "min_expected_count": round(float(expected.min()), 1),
+        # Below 5 the chi-square approximation is unreliable, so report the fact
+        # rather than quoting a p-value the reader will over-trust.
+        "expected_counts_adequate": bool(expected.min() >= 5),
+        "n": n,
         "alpha": alpha,
         "significant": bool(p_value < alpha),
     }
 
 
-def t_test_continuous(data: pd.DataFrame, metric: str = "processing_time",
-                      alpha: float | None = None) -> dict:
-    """Welch's two-sample t-test on a continuous secondary metric.
+# ---------------------------------------------------------------------------
+# Continuous outcomes
+# ---------------------------------------------------------------------------
+def welch_t_test(a: pd.Series, b: pd.Series, alpha: float | None = None,
+                 label_a: str = "Group A", label_b: str = "Group B",
+                 metric: str = "value") -> dict:
+    """Welch's two-sample t-test on a continuous metric.
 
-    Welch's variant is used rather than Student's because the two arms have no
-    reason to share a variance - an automated process is typically both faster
-    *and* more consistent than a manual one.
+    Welch's variant rather than Student's because two operational groups have no
+    reason to share a variance - an air lane is both faster *and* more consistent
+    than an ocean lane, and assuming equal variance would understate the
+    uncertainty on the slower one.
 
     Returns
     -------
     dict
-        Per-arm means and sds, ``mean_difference``, ``t_statistic``,
+        Per-group means and sds, ``mean_difference``, ``t_statistic``,
         ``p_value``, ``degrees_of_freedom``, ``cohens_d`` (effect size),
         ``ci_lower``/``ci_upper`` on the difference, ``significant``.
     """
-    cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    alpha = _alpha(alpha)
+    x, y = pd.Series(a).dropna().astype(float), pd.Series(b).dropna().astype(float)
 
-    control = data.loc[data["arm"] == "Control", metric].dropna()
-    treatment = data.loc[data["arm"] == "Treatment", metric].dropna()
+    t_stat, p_value = stats.ttest_ind(x, y, equal_var=False)
 
-    t_stat, p_value = stats.ttest_ind(treatment, control, equal_var=False)
-
-    n1, n2 = len(treatment), len(control)
-    s1, s2 = treatment.std(ddof=1), control.std(ddof=1)
+    n1, n2 = len(x), len(y)
+    s1, s2 = x.std(ddof=1), y.std(ddof=1)
     # Pooled sd for Cohen's d - the conventional standardised effect size.
     pooled_sd = np.sqrt(((n1 - 1) * s1**2 + (n2 - 1) * s2**2) / (n1 + n2 - 2))
-    diff = treatment.mean() - control.mean()
+    diff = x.mean() - y.mean()
     cohens_d = diff / pooled_sd if pooled_sd else 0.0
 
     se_diff = np.sqrt(s1**2 / n1 + s2**2 / n2)
@@ -333,12 +258,16 @@ def t_test_continuous(data: pd.DataFrame, metric: str = "processing_time",
     return {
         "test": "Welch's Two-Sample T-Test",
         "metric": metric,
-        "control_mean": round(float(control.mean()), 4),
-        "treatment_mean": round(float(treatment.mean()), 4),
-        "control_sd": round(float(s2), 4),
-        "treatment_sd": round(float(s1), 4),
+        "label_a": label_a,
+        "label_b": label_b,
+        "n_a": int(n1),
+        "n_b": int(n2),
+        "mean_a": round(float(x.mean()), 4),
+        "mean_b": round(float(y.mean()), 4),
+        "sd_a": round(float(s1), 4),
+        "sd_b": round(float(s2), 4),
         "mean_difference": round(float(diff), 4),
-        "pct_change": round(100 * float(diff) / float(control.mean()), 2) if control.mean() else 0.0,
+        "pct_change": round(100 * float(diff) / float(y.mean()), 2) if y.mean() else 0.0,
         "t_statistic": round(float(t_stat), 4),
         "p_value": float(p_value),
         "degrees_of_freedom": round(float(dof), 1),
@@ -348,11 +277,6 @@ def t_test_continuous(data: pd.DataFrame, metric: str = "processing_time",
         "alpha": alpha,
         "significant": bool(p_value < alpha),
     }
-
-
-#: Absolute skewness above which a mean-based test stops being trustworthy and the
-#: rank-based result should be quoted instead.
-SKEW_LIMIT = 2.0
 
 
 def mann_whitney_test(a: pd.Series, b: pd.Series, alpha: float | None = None,
@@ -369,14 +293,13 @@ def mann_whitney_test(a: pd.Series, b: pd.Series, alpha: float | None = None,
         Per-group n and median, ``u_statistic``, ``p_value``,
         ``rank_biserial`` (effect size, -1..1), ``alpha``, ``significant``.
     """
-    cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    alpha = _alpha(alpha)
 
     x, y = pd.Series(a).dropna(), pd.Series(b).dropna()
     if len(x) < 2 or len(y) < 2:
         return {"test": "Mann-Whitney U", "p_value": float("nan"),
                 "significant": False, "note": "insufficient data in one group",
-                f"n_{label_a}": len(x), f"n_{label_b}": len(y)}
+                "n_a": int(len(x)), "n_b": int(len(y))}
 
     u_stat, p_value = stats.mannwhitneyu(x, y, alternative="two-sided")
     # Rank-biserial correlation: U rescaled to -1..1, interpretable as the
@@ -385,10 +308,12 @@ def mann_whitney_test(a: pd.Series, b: pd.Series, alpha: float | None = None,
 
     return {
         "test": "Mann-Whitney U (rank-based)",
-        f"n_{label_a}": int(len(x)),
-        f"n_{label_b}": int(len(y)),
-        f"median_{label_a}": round(float(x.median()), 4),
-        f"median_{label_b}": round(float(y.median()), 4),
+        "label_a": label_a,
+        "label_b": label_b,
+        "n_a": int(len(x)),
+        "n_b": int(len(y)),
+        "median_a": round(float(x.median()), 4),
+        "median_b": round(float(y.median()), 4),
         "median_difference": round(float(x.median() - y.median()), 4),
         "u_statistic": round(float(u_stat), 1),
         "p_value": float(p_value),
@@ -399,16 +324,29 @@ def mann_whitney_test(a: pd.Series, b: pd.Series, alpha: float | None = None,
 
 
 def compare_continuous(a: pd.Series, b: pd.Series, alpha: float | None = None,
-                       label_a: str = "Group A", label_b: str = "Group B") -> dict:
+                       label_a: str = "Group A", label_b: str = "Group B",
+                       metric: str = "value") -> dict:
     """Compare a continuous metric with both a mean-based and a rank-based test.
 
     Which test to believe is not a matter of taste - it depends on the data. On
-    heavily skewed metrics the two disagree wildly: on SCMS freight cost per
-    kilogram (mean $38.93, median $7.26, max $31,088) Welch's t-test returns
-    p = 0.254 while Mann-Whitney returns p = 1.6e-93 on the *same* comparison.
-    Welch is comparing means that the outliers have rendered meaningless.
+    heavily skewed metrics the two disagree wildly, and they disagree in *both*
+    directions on this dataset:
 
-    This runs both, measures the skew, and states which result to quote.
+    * Freight as a share of commodity value (mean 2,548%, median 10.6%, skew 78)
+      compared across product group: Welch returns p = 0.439 and Mann-Whitney
+      p = 6.0e-10. Here Welch is wrong - a few extreme ratios have inflated the
+      variance until the mean test cannot resolve a difference the medians show
+      clearly (11.8% against 9.7%).
+    * Delivery delay compared across era: Welch returns p = 8.2e-06 and
+      Mann-Whitney p = 0.453. Here *neither* is wrong. The mean delay moved from
+      -5.0 to -7.5 days while both medians sit at exactly 0, because 61% of
+      deliveries land on their scheduled day. The change is in the tail, not the
+      typical shipment.
+
+    This runs both, measures the skew, and states which result to quote - including
+    "both" for the second case. The threshold lives in
+    ``config.ab_testing.skew_limit`` so the rule is written down once rather than
+    decided per chart.
 
     Returns
     -------
@@ -416,34 +354,60 @@ def compare_continuous(a: pd.Series, b: pd.Series, alpha: float | None = None,
         ``welch`` and ``mann_whitney`` sub-dicts, ``max_abs_skew``,
         ``recommended_test``, ``tests_agree``, and ``verdict`` (plain English).
     """
-    cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    alpha = _alpha(alpha)
+    limit = _skew_limit()
 
     x, y = pd.Series(a).dropna(), pd.Series(b).dropna()
     if len(x) < 2 or len(y) < 2:
         return {"recommended_test": "none", "tests_agree": False,
                 "verdict": "Insufficient data in one group to compare.",
-                "welch": None, "mann_whitney": None, "max_abs_skew": float("nan")}
+                "welch": None, "mann_whitney": None, "max_abs_skew": float("nan"),
+                "skew_limit": limit}
 
-    # Welch on the raw values, framed as a two-arm frame so the existing helper
-    # can be reused rather than duplicated.
-    frame = pd.concat([
-        pd.DataFrame({"arm": "Treatment", "value": x}),
-        pd.DataFrame({"arm": "Control", "value": y}),
-    ], ignore_index=True)
-    welch = t_test_continuous(frame, metric="value", alpha=alpha)
+    welch = welch_t_test(x, y, alpha=alpha, label_a=label_a, label_b=label_b,
+                         metric=metric)
     rank = mann_whitney_test(x, y, alpha=alpha, label_a=label_a, label_b=label_b)
 
     max_abs_skew = float(max(abs(stats.skew(x)), abs(stats.skew(y))))
-    skewed = max_abs_skew > SKEW_LIMIT
-    recommended = "mann_whitney" if skewed else "welch"
+    skewed = max_abs_skew > limit
     agree = bool(welch["significant"] == rank["significant"])
+    if not skewed:
+        recommended = "welch"
+    elif agree or rank["significant"]:
+        recommended = "mann_whitney"
+    else:
+        # Skewed, and only Welch is significant. Neither test alone is the answer:
+        # the mean moved and the median did not, which is a fact about the tail that
+        # requires both numbers to state.
+        recommended = "both"
 
-    if skewed and not agree:
+    if skewed and not agree and rank["significant"]:
+        # Rank test finds an effect the mean test misses: the classic outlier
+        # masking case. A handful of extreme values has inflated one group's
+        # variance so far that Welch can no longer resolve a difference the bulk
+        # of the distribution shows clearly.
         verdict = (
             f"Skew is {max_abs_skew:.1f}, so the means are not a fair summary and "
             f"the two tests disagree. Quote Mann-Whitney (p = {rank['p_value']:.2e}); "
-            f"Welch's p = {welch['p_value']:.3f} is an artefact of outliers."
+            f"Welch's p = {welch['p_value']:.3f} is an artefact of outliers masking a "
+            f"real difference in the bulk of the distribution."
+        )
+    elif skewed and not agree:
+        # The opposite disagreement, and it needs the opposite reading. Welch is
+        # significant while the rank test is not, which means the means differ but
+        # the central tendency does not - the difference lives in the tail. Calling
+        # Welch an artefact here would be wrong: a shift in the mean is real and
+        # often the operationally important thing. What it is *not* is a shift in
+        # the typical case.
+        verdict = (
+            f"Skew is {max_abs_skew:.1f} and the tests disagree in the other "
+            f"direction: Welch is significant (p = {welch['p_value']:.2e}) while "
+            f"Mann-Whitney is not (p = {rank['p_value']:.3f}). Both are correct about "
+            f"different things. The means differ by "
+            f"{welch['mean_difference']:+.2f} but the medians are "
+            f"{rank['median_a']:.1f} against {rank['median_b']:.1f}, so the "
+            f"difference is in the tail rather than the typical case. Report it as a "
+            f"tail effect, not a shift in the average outcome."
         )
     elif skewed:
         verdict = (
@@ -460,7 +424,7 @@ def compare_continuous(a: pd.Series, b: pd.Series, alpha: float | None = None,
         "welch": welch,
         "mann_whitney": rank,
         "max_abs_skew": round(max_abs_skew, 2),
-        "skew_limit": SKEW_LIMIT,
+        "skew_limit": limit,
         "recommended_test": recommended,
         "tests_agree": agree,
         "verdict": verdict,
@@ -474,18 +438,18 @@ def required_sample_size(control_rate: float, treatment_rate: float,
                          alpha: float | None = None, power: float | None = None) -> dict:
     """Sample size needed to detect a given effect at the configured power.
 
-    Run *before* an experiment. An under-powered test that returns "not
-    significant" has told you nothing, and that is the most common way
-    operational experiments waste a quarter.
+    Run *before* committing to a measurement. A test that returns "not
+    significant" without the power to have detected the effect has told you
+    nothing, and that is the most common way an operational trial wastes a quarter.
 
     Returns
     -------
     dict
-        ``effect_size`` (Cohen's h), ``n_per_arm``, ``n_total``, ``alpha``,
+        ``effect_size_cohens_h``, ``n_per_arm``, ``n_total``, ``alpha``,
         ``power``, and the input rates.
     """
     cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    alpha = _alpha(alpha)
     power = float(cfg.power if power is None else power)
 
     # Cohen's h - the standard effect size for a difference of proportions.
@@ -508,9 +472,13 @@ def required_sample_size(control_rate: float, treatment_rate: float,
 def achieved_power(successes_control: int, n_control: int,
                    successes_treatment: int, n_treatment: int,
                    alpha: float | None = None) -> float:
-    """Post-hoc power actually achieved by the realised sample."""
-    cfg = get_config().ab_testing
-    alpha = float(cfg.alpha if alpha is None else alpha)
+    """Post-hoc power actually achieved by the realised sample.
+
+    This is what turns "no significant difference" into a usable statement. A null
+    result at 99% power is evidence the effect is absent; the same null at 20%
+    power is evidence of nothing at all.
+    """
+    alpha = _alpha(alpha)
     p1 = successes_control / n_control if n_control else 0.0
     p2 = successes_treatment / n_treatment if n_treatment else 0.0
     effect = 2 * np.arcsin(np.sqrt(p2)) - 2 * np.arcsin(np.sqrt(p1))
@@ -521,283 +489,236 @@ def achieved_power(successes_control: int, n_control: int,
         ratio=n_treatment / n_control, alternative="two-sided"))
 
 
-# ---------------------------------------------------------------------------
-# Segment analysis and business translation
-# ---------------------------------------------------------------------------
-def segment_analysis(data: pd.DataFrame, dimension: str = "region") -> pd.DataFrame:
-    """Break the treatment effect down by segment.
+def minimum_detectable_effect(baseline_rate: float, n_control: int,
+                              n_treatment: int, alpha: float | None = None,
+                              power: float | None = None) -> dict:
+    """Smallest difference the realised sample could have detected.
 
-    A headline lift driven entirely by one region is a very different investment
-    case from one that holds everywhere, so this check runs on every experiment.
-    """
-    rows = []
-    for segment, group in data.groupby(dimension):
-        control = group[group["arm"] == "Control"]
-        treatment = group[group["arm"] == "Treatment"]
-        if len(control) < 10 or len(treatment) < 10:
-            continue  # too few subjects for a stable segment estimate
+    This is the correct way to interpret a null result, and it exists because the
+    obvious alternative is a statistical trap. Post-hoc power computed at the
+    *observed* effect size is a deterministic function of the p-value: a
+    non-significant result mechanically returns low observed power, so using it to
+    judge a null is circular. On the first-line-designation comparison here,
+    observed power is 6% purely because the observed gap is 0.16 points - it says
+    nothing about whether the test was sensitive.
 
-        p_c, p_t = control["success"].mean(), treatment["success"].mean()
-        _, p_value = proportions_ztest(
-            count=np.array([treatment["success"].sum(), control["success"].sum()]),
-            nobs=np.array([len(treatment), len(control)]))
-        rows.append({
-            dimension: segment,
-            "n_control": len(control),
-            "n_treatment": len(treatment),
-            "control_rate_pct": round(100 * p_c, 2),
-            "treatment_rate_pct": round(100 * p_t, 2),
-            "lift_pp": round(100 * (p_t - p_c), 2),
-            "relative_lift_pct": round(100 * (p_t - p_c) / p_c, 2) if p_c else 0.0,
-            "p_value": round(float(p_value), 4),
-            "significant": bool(p_value < get_config().ab_testing.alpha),
-        })
-    return pd.DataFrame(rows).sort_values("lift_pp", ascending=False).reset_index(drop=True)
-
-
-def estimate_business_impact(experiment_key: str, absolute_diff: float) -> dict:
-    """Translate a lift in the primary metric into an annualised dollar impact.
-
-    Uses the platform's own actuals - annual units processed and the realised
-    weighted-average unit cost - so the number is anchored to this business
-    rather than to a generic benchmark.
+    What a reader actually needs to know is: given these sample sizes, how large a
+    difference *would* have shown up? If the answer is "anything above 1.5 points",
+    then a measured 0.16-point gap is meaningful evidence that no material
+    difference exists.
 
     Parameters
     ----------
-    experiment_key
-        Which intervention is being valued.
-    absolute_diff
-        Improvement in the primary rate, as a proportion (0.031 = +3.1pp).
+    baseline_rate
+        Pooled event rate, as a proportion.
+    n_control, n_treatment
+        Realised group sizes.
+    alpha, power
+        Defaults from ``config.ab_testing``.
 
     Returns
     -------
     dict
-        ``annual_units``, ``avg_unit_cost_usd``, ``units_recovered_annually``,
-        ``annual_value_usd`` and the assumption trail behind them.
+        ``mde_pp`` (the detectable difference in percentage points), the inputs,
+        and a plain-English ``interpretation``.
     """
-    batches = loader.load_batches()
-    years = max(batches["year"].nunique(), 1)
+    cfg = get_config().ab_testing
+    alpha = _alpha(alpha)
+    power = float(cfg.power if power is None else power)
 
-    annual_units = float(batches["units_procured"].sum()) / years
-    total_units = float(batches["units_procured"].sum())
-    avg_unit_cost = float(
-        (batches["units_procured"] * batches["unit_cost_usd"]).sum() / total_units)
-
-    units_recovered = annual_units * absolute_diff
-
-    # Late-delivery interventions are valued on avoided SLA penalties rather
-    # than on recovered product, because no units are physically saved.
-    if experiment_key == "route_optimization":
-        shipments = loader.load_shipments()
-        annual_shipments = len(shipments) / years
-        penalty = float(get_config().economics.late_shipment_penalty)
-        annual_value = annual_shipments * absolute_diff * penalty
-        basis = f"{annual_shipments:,.0f} shipments/yr x {absolute_diff:.3%} x ${penalty:,.0f} SLA penalty avoided"
-    else:
-        annual_value = units_recovered * avg_unit_cost
-        basis = f"{annual_units:,.0f} units/yr x {absolute_diff:.3%} x ${avg_unit_cost:.2f}/unit"
+    # Solve for the Cohen's h detectable at this sample size, then invert the
+    # arcsine transform around the baseline to express it as a rate difference.
+    effect_h = NormalIndPower().solve_power(
+        effect_size=None, nobs1=n_control, alpha=alpha, power=power,
+        ratio=n_treatment / n_control, alternative="two-sided")
+    detectable_rate = np.sin(np.arcsin(np.sqrt(baseline_rate)) + effect_h / 2) ** 2
+    mde = float(detectable_rate - baseline_rate)
 
     return {
-        "annual_units": round(annual_units, 0),
-        "avg_unit_cost_usd": round(avg_unit_cost, 2),
-        "units_recovered_annually": round(units_recovered, 0),
-        "annual_value_usd": round(annual_value, 0),
-        "calculation_basis": basis,
-        "years_of_history": years,
+        "baseline_rate_pct": round(100 * baseline_rate, 2),
+        "n_control": int(n_control),
+        "n_treatment": int(n_treatment),
+        "effect_size_cohens_h": round(float(effect_h), 4),
+        "mde_pp": round(100 * mde, 3),
+        "alpha": alpha,
+        "power": power,
+        "interpretation": (
+            f"At n={n_control:,} versus n={n_treatment:,} and a "
+            f"{100 * baseline_rate:.1f}% baseline, this comparison could detect a "
+            f"difference of {100 * mde:+.2f} percentage points at {power:.0%} power. "
+            f"A smaller measured gap than that is evidence of no material "
+            f"difference, not an absence of evidence."),
     }
 
 
-def business_recommendation(z_result: dict, t_result: dict, impact: dict,
-                            power: float) -> dict:
-    """Convert statistical output into an adopt / hold / reject decision.
+# ---------------------------------------------------------------------------
+# Business translation
+# ---------------------------------------------------------------------------
+def penalty_impact(absolute_diff: float, annual_shipments: float) -> dict:
+    """Value a change in on-time rate as avoided SLA penalties.
 
-    The decision rule deliberately separates two questions that are often
-    conflated:
+    This is the only place in the project that multiplies a measured result by an
+    assumed rate, and it is deliberately the *whole* of the financial modelling.
+    SCMS records no penalty, discount or expediting cost, so the shipment count and
+    the rate difference are measured while the per-shipment penalty comes from
+    ``config.economics.late_shipment_penalty``. Presenting anything more elaborate
+    would be presenting an assumption as a finding.
 
-    * **Is the effect real?** - p-value below alpha, with adequate power.
-    * **Is the effect worth it?** - relative lift above the practical
+    Parameters
+    ----------
+    absolute_diff
+        Improvement in on-time rate as a proportion (0.031 = +3.1 points).
+    annual_shipments
+        Shipments per year exposed to the change - measured, not assumed.
+
+    Returns
+    -------
+    dict
+        ``annual_value_usd``, the inputs, and the calculation written out.
+    """
+    penalty = float(get_config().economics.late_shipment_penalty)
+    annual_value = annual_shipments * absolute_diff * penalty
+    return {
+        "annual_shipments": round(float(annual_shipments), 0),
+        "penalty_per_late_shipment_usd": penalty,
+        "annual_value_usd": round(float(annual_value), 0),
+        "calculation_basis": (
+            f"{annual_shipments:,.0f} shipments/yr x {absolute_diff:.3%} "
+            f"x ${penalty:,.0f} penalty avoided"),
+        "assumption": (
+            "Shipment count and rate difference are measured from SCMS; the "
+            "per-shipment penalty is a configured assumption."),
+    }
+
+
+def business_recommendation(z_result: dict, power: float,
+                            impact: dict | None = None,
+                            supporting: list[str] | None = None,
+                            mde: dict | None = None) -> dict:
+    """Convert a statistical result into an act / hold / do-not-act decision.
+
+    The decision rule deliberately separates two questions that get conflated:
+
+    * **Is the difference real?** - p-value below alpha, with adequate power.
+    * **Is it worth acting on?** - relative difference above the practical
       significance floor.
 
     A result can be statistically significant and still fail the second test,
-    which is exactly when a business should decline to spend the capital.
+    which is exactly when an organisation should decline to spend the money.
+
+    Parameters
+    ----------
+    z_result
+        Output of :func:`two_proportion_z_test`.
+    power
+        Achieved power, from :func:`achieved_power`.
+    impact
+        Optional :func:`penalty_impact` output, to attach a dollar figure.
+    supporting
+        Optional extra evidence lines (e.g. a continuous-metric result, or the
+        confound that limits the reading).
     """
     cfg = get_config().ab_testing
     significant = z_result["significant"]
-    lift = z_result["relative_lift_pct"]
+    lift = abs(z_result["relative_lift_pct"])
     practical = lift >= PRACTICAL_SIGNIFICANCE_LIFT_PCT
     well_powered = power >= float(cfg.power)
+    money = (f" Estimated annual value ${impact['annual_value_usd']:,.0f}."
+             if impact else "")
+
+    # A null result is judged on the minimum detectable effect, never on post-hoc
+    # power - see minimum_detectable_effect for why that distinction matters. There
+    # are three genuinely different kinds of null and collapsing them loses the
+    # most useful part of the answer.
+    if not significant and mde is not None:
+        detectable_pp = abs(mde["mde_pp"])
+        measured_pp = abs(z_result["absolute_diff_pp"])
+        # The practical threshold is a *relative* lift, so convert it to points at
+        # this baseline before comparing it against a points-based MDE.
+        threshold_pp = abs(z_result["p_control"]) * PRACTICAL_SIGNIFICANCE_LIFT_PCT
+
+        if detectable_pp <= threshold_pp:
+            verdict, confidence = "NO EFFECT", "High"
+            rationale = (
+                f"No significant difference (p={z_result['p_value']:.3f} against "
+                f"alpha={cfg.alpha}), and the sample was sensitive enough for that "
+                f"to mean something: it could have detected a gap of "
+                f"{detectable_pp:.2f} points, inside the {threshold_pp:.2f} points "
+                f"that would justify acting. The measured gap is {measured_pp:.2f} "
+                f"points. This is positive evidence the groups do not differ.")
+        else:
+            verdict, confidence = "NO EFFECT (BOUNDED)", "Medium"
+            rationale = (
+                f"No significant difference (p={z_result['p_value']:.3f}); the "
+                f"measured gap is {measured_pp:.2f} points. This rules out any "
+                f"difference larger than {detectable_pp:.2f} points, which is a real "
+                f"and useful bound - but it sits just above the {threshold_pp:.2f} "
+                f"points that would justify acting, so a difference small enough to "
+                f"matter marginally cannot be excluded. Report the bound, not "
+                f"'no difference'.")
+
+        return {
+            "verdict": verdict, "confidence": confidence, "rationale": rationale,
+            "supporting_evidence": list(supporting or []) + [mde["interpretation"]],
+            "practical_significance_met": False,
+            "statistically_significant": False,
+            "adequately_powered": detectable_pp <= threshold_pp,
+            "achieved_power": round(float(power), 4),
+            "minimum_detectable_effect_pp": mde["mde_pp"],
+            "practical_threshold_pp": round(threshold_pp, 3),
+            "practical_threshold_pct": PRACTICAL_SIGNIFICANCE_LIFT_PCT,
+        }
 
     if significant and practical and well_powered:
-        verdict, confidence = "ADOPT", "High"
+        verdict, confidence = "ACT", "High"
         rationale = (
-            f"The {z_result['absolute_diff_pp']:+.2f}pp improvement is statistically "
-            f"significant (p={z_result['p_value']:.2e}) and the {lift:.1f}% relative lift "
-            f"clears the {PRACTICAL_SIGNIFICANCE_LIFT_PCT}% practical-significance floor. "
-            f"Estimated annual value ${impact['annual_value_usd']:,.0f}. Roll out."
+            f"The {z_result['absolute_diff_pp']:+.2f}pp gap is statistically "
+            f"significant (p={z_result['p_value']:.2e}) and the {lift:.1f}% relative "
+            f"difference clears the {PRACTICAL_SIGNIFICANCE_LIFT_PCT}% "
+            f"practical-significance floor.{money}"
         )
     elif significant and practical and not well_powered:
-        verdict, confidence = "ADOPT WITH MONITORING", "Medium"
+        verdict, confidence = "ACT WITH MONITORING", "Medium"
         rationale = (
-            f"The effect is significant (p={z_result['p_value']:.2e}) and commercially "
-            f"meaningful, but achieved power is {power:.0%}, below the {cfg.power:.0%} "
-            f"target. Roll out to a limited set of sites and confirm before full scale-up."
+            f"The gap is significant (p={z_result['p_value']:.2e}) and commercially "
+            f"meaningful, but achieved power is {power:.0%}, below the "
+            f"{cfg.power:.0%} target. Act on a limited scope and re-measure."
         )
     elif significant and not practical:
-        verdict, confidence = "DO NOT ADOPT", "High"
+        verdict, confidence = "DO NOT ACT", "High"
         rationale = (
-            f"The effect is statistically real (p={z_result['p_value']:.2e}) but the "
-            f"{lift:.1f}% relative lift is below the {PRACTICAL_SIGNIFICANCE_LIFT_PCT}% "
-            f"threshold that justifies the capital and change-management cost. "
-            f"A large sample has detected a difference too small to be worth acting on."
+            f"The gap is statistically real (p={z_result['p_value']:.2e}) but the "
+            f"{lift:.1f}% relative difference is below the "
+            f"{PRACTICAL_SIGNIFICANCE_LIFT_PCT}% threshold that justifies the cost "
+            f"of change. A large sample has detected a difference too small to matter."
         )
     else:
         verdict, confidence = "INCONCLUSIVE", "Low"
         rationale = (
-            f"No significant difference detected (p={z_result['p_value']:.3f} vs alpha="
-            f"{cfg.alpha}). Achieved power is {power:.0%}. "
-            f"Either the intervention does not work, or the test is too small to tell - "
-            f"extend the run before drawing a conclusion."
-        )
-
-    supporting = []
-    if t_result["significant"]:
-        supporting.append(
-            f"Secondary metric ({t_result['metric']}) also improved: "
-            f"{t_result['mean_difference']:+.2f} ({t_result['pct_change']:+.1f}%), "
-            f"p={t_result['p_value']:.2e}, Cohen's d={t_result['cohens_d']:.2f}."
-        )
-    else:
-        supporting.append(
-            f"Secondary metric ({t_result['metric']}) showed no significant change "
-            f"(p={t_result['p_value']:.3f})."
+            f"No significant difference (p={z_result['p_value']:.3f}), and without a "
+            f"minimum-detectable-effect calculation there is no basis for calling "
+            f"this a null rather than an underpowered test. Compute the MDE before "
+            f"reading anything into it."
         )
 
     return {
         "verdict": verdict,
         "confidence": confidence,
         "rationale": rationale,
-        "supporting_evidence": supporting,
+        "supporting_evidence": list(supporting or []),
         "practical_significance_met": practical,
         "statistically_significant": significant,
         "adequately_powered": well_powered,
+        "achieved_power": round(float(power), 4),
+        "minimum_detectable_effect_pp": mde["mde_pp"] if mde else None,
         "practical_threshold_pct": PRACTICAL_SIGNIFICANCE_LIFT_PCT,
     }
 
 
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
-def run_experiment(experiment_key: str, sample_size: int | None = None,
-                   seed: int | None = None,
-                   treatment_rate_override: float | None = None) -> dict:
-    """Run one intervention end to end: simulate, test, value, recommend.
-
-    Parameters
-    ----------
-    experiment_key
-        Key from :func:`list_experiments`.
-    sample_size
-        Total subjects. Defaults to config.
-    seed
-        Random seed for reproducibility.
-    treatment_rate_override
-        Override the assumed treatment effect (dashboard sensitivity control).
-
-    Returns
-    -------
-    dict
-        ``experiment`` (metadata), ``data`` (subject-level frame),
-        ``summary`` (per-arm table), ``z_test``, ``chi_square``, ``t_test``,
-        ``power_analysis``, ``achieved_power``, ``segments``,
-        ``business_impact``, ``recommendation``.
-    """
-    spec = _experiment_spec(experiment_key)
-    data = simulate_experiment(experiment_key, sample_size, seed, treatment_rate_override)
-
-    control = data[data["arm"] == "Control"]
-    treatment = data[data["arm"] == "Treatment"]
-    sc, nc = int(control["success"].sum()), len(control)
-    st_, nt = int(treatment["success"].sum()), len(treatment)
-
-    z_result = two_proportion_z_test(sc, nc, st_, nt)
-    chi_result = chi_square_test(data)
-    t_result = t_test_continuous(data)
-    power = achieved_power(sc, nc, st_, nt)
-    impact = estimate_business_impact(experiment_key, z_result["absolute_diff"])
-
-    summary = pd.DataFrame([
-        {"arm": "Control", "subjects": nc, "successes": sc,
-         "success_rate_pct": round(100 * sc / nc, 2),
-         "ci_lower_pct": round(100 * z_result["control_ci"][0], 2),
-         "ci_upper_pct": round(100 * z_result["control_ci"][1], 2),
-         "mean_processing_time": t_result["control_mean"]},
-        {"arm": "Treatment", "subjects": nt, "successes": st_,
-         "success_rate_pct": round(100 * st_ / nt, 2),
-         "ci_lower_pct": round(100 * z_result["treatment_ci"][0], 2),
-         "ci_upper_pct": round(100 * z_result["treatment_ci"][1], 2),
-         "mean_processing_time": t_result["treatment_mean"]},
-    ])
-
-    log.info("Experiment '%s': lift %+.2fpp (p=%.2e) -> %s",
-             experiment_key, z_result["absolute_diff_pp"], z_result["p_value"],
-             business_recommendation(z_result, t_result, impact, power)["verdict"])
-
-    return {
-        "experiment": {
-            "key": experiment_key,
-            "name": spec.name,
-            "metric": spec.metric,
-            "description": " ".join(str(spec.description).split()),
-            "sample_size": len(data),
-        },
-        "data": data,
-        "summary": summary,
-        "z_test": z_result,
-        "chi_square": chi_result,
-        "t_test": t_result,
-        "power_analysis": required_sample_size(
-            float(spec.control_rate),
-            float(spec.treatment_rate if treatment_rate_override is None
-                  else treatment_rate_override)),
-        "achieved_power": round(power, 4),
-        "segments": segment_analysis(data),
-        "business_impact": impact,
-        "recommendation": business_recommendation(z_result, t_result, impact, power),
-    }
-
-
-def run_all_experiments(sample_size: int | None = None) -> pd.DataFrame:
-    """Run every catalogued intervention and rank them by annual value.
-
-    This is the portfolio view an operations director actually wants: not
-    "did experiment X work?" but "given a fixed budget, which of these four
-    projects should we fund first?"
-    """
-    rows = []
-    for key in get_config().ab_testing.experiments:
-        result = run_experiment(key, sample_size=sample_size)
-        rows.append({
-            "experiment": result["experiment"]["name"],
-            "key": key,
-            "metric": result["experiment"]["metric"],
-            "control_rate_pct": round(100 * result["z_test"]["p_control"], 2),
-            "treatment_rate_pct": round(100 * result["z_test"]["p_treatment"], 2),
-            "lift_pp": result["z_test"]["absolute_diff_pp"],
-            "relative_lift_pct": result["z_test"]["relative_lift_pct"],
-            "p_value": result["z_test"]["p_value"],
-            "significant": result["z_test"]["significant"],
-            "achieved_power": result["achieved_power"],
-            "annual_value_usd": result["business_impact"]["annual_value_usd"],
-            "verdict": result["recommendation"]["verdict"],
-        })
-    return pd.DataFrame(rows).sort_values("annual_value_usd", ascending=False).reset_index(drop=True)
-
-
 __all__ = [
-    "list_experiments", "simulate_experiment", "two_proportion_z_test",
-    "chi_square_test", "t_test_continuous", "mann_whitney_test",
-    "compare_continuous", "required_sample_size", "achieved_power",
-    "segment_analysis", "estimate_business_impact", "business_recommendation",
-    "run_experiment", "run_all_experiments",
+    "two_proportion_z_test", "chi_square_test", "welch_t_test",
+    "mann_whitney_test", "compare_continuous", "required_sample_size",
+    "achieved_power", "minimum_detectable_effect", "penalty_impact",
+    "business_recommendation",
     "PRACTICAL_SIGNIFICANCE_LIFT_PCT", "SKEW_LIMIT",
 ]

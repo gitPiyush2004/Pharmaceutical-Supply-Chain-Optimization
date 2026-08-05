@@ -53,9 +53,8 @@ log = get_logger(__name__)
 
 # Artefact stems written by :func:`src.ml.train.save_artifacts`.
 DRUG_MODEL = "drug_classification"
-BATCH_MODEL = "batch_risk"
 LATE_DELIVERY_MODEL = "late_delivery"
-KNOWN_MODELS: tuple[str, ...] = (DRUG_MODEL, BATCH_MODEL, LATE_DELIVERY_MODEL)
+KNOWN_MODELS: tuple[str, ...] = (DRUG_MODEL, LATE_DELIVERY_MODEL)
 
 # The one instruction a user can act on when an artefact is missing.
 _TRAIN_HINT = "run `python scripts/train_models.py` (or `python -c \"from src.ml.train import train_all; train_all()\"`)"
@@ -73,7 +72,7 @@ class LoadedModel(NamedTuple):
     Attributes
     ----------
     name : str
-        Artefact stem, e.g. ``'batch_risk'``.
+        Artefact stem, e.g. ``'late_delivery'``.
     pipeline : sklearn.pipeline.Pipeline
         Fitted preprocessing + estimator pipeline.
     metadata : dict
@@ -96,7 +95,7 @@ def load_model(name: str) -> LoadedModel:
     Parameters
     ----------
     name : str
-        Artefact stem: ``'drug_classification'`` or ``'batch_risk'``.
+        Artefact stem: ``'drug_classification'`` or ``'late_delivery'``.
 
     Returns
     -------
@@ -408,169 +407,6 @@ def predict_drug_batch(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # MODEL 2 - batch risk
 # ---------------------------------------------------------------------------
-def _batch_explanation(row: pd.Series, prediction: str, confidence: float) -> str:
-    """Build a one-line supply chain rationale for a batch risk verdict."""
-    excursion = float(row["temp_excursion_c"])
-    humidity = float(row["humidity_excess"])
-    drivers: list[str] = []
-    if excursion > 0:
-        drivers.append(
-            f"{excursion:.1f} degC above the labelled storage limit for "
-            f"{int(row['storage_duration_days'])} days (thermal load {float(row['thermal_load']):.0f})"
-        )
-    else:
-        drivers.append("storage temperature within the labelled limit")
-    if humidity > 0:
-        drivers.append(f"{humidity:.1f} points of relative humidity above the moisture threshold")
-    drivers.append(
-        f"cycle time {float(row['cycle_time_ratio']):.2f}x the network median "
-        f"with a {float(row['qa_delay_days']):.1f}-day QA delay"
-    )
-    drivers.append(f"supplier reliability {float(row['supplier_reliability']):.2f}")
-    return (
-        f"Predicted {prediction} risk with {confidence:.1%} confidence. Drivers: "
-        + "; ".join(drivers)
-        + "."
-    )
-
-
-def predict_batch_risk(**features: Any) -> dict[str, Any]:
-    """Predict the QA risk tier for a single manufacturing batch (MODEL 2).
-
-    Parameters
-    ----------
-    **features
-        One keyword per configured raw feature (``ml.batch_risk.features``):
-        ``storage_temp_c``, ``storage_humidity_pct``, ``storage_duration_days``,
-        ``total_cycle_time_days``, ``qa_delay_days``, ``supplier_reliability``,
-        ``is_cold_chain``, ``shelf_life_months``, ``drug_code`` and ``region``.
-
-    Returns
-    -------
-    dict
-        ``prediction`` (``'Low'`` / ``'Medium'`` / ``'High'``), ``confidence``,
-        ``probabilities`` (sorted descending), ``explanation`` and ``model``.
-
-    Raises
-    ------
-    ValueError
-        If a required feature is missing, an unexpected keyword is supplied, a
-        categorical value is outside the trained vocabulary, or a numeric value
-        is not a finite number.
-    FileNotFoundError
-        If the model artefact has not been trained yet.
-    """
-    model = load_model(BATCH_MODEL)
-    allowed = _known_categories(model)
-    raw_required = list(get_config().ml.batch_risk.features)
-
-    missing = [name for name in raw_required if name not in features]
-    if missing:
-        raise ValueError(
-            f"predict_batch_risk is missing required feature(s): {missing}. "
-            f"Required: {raw_required}."
-        )
-    unexpected = [name for name in features if name not in raw_required]
-    if unexpected:
-        raise ValueError(
-            f"predict_batch_risk received unknown feature(s): {unexpected}. "
-            f"Accepted: {raw_required}."
-        )
-
-    record: dict[str, Any] = {}
-    for name in raw_required:
-        value = features[name]
-        if name in allowed:
-            record[name] = pp.normalise_categorical(str(value), allowed[name], name)
-        else:
-            # supplier_reliability is a 0-1 fraction and is_cold_chain a 0/1
-            # flag; both, like every other numeric here, are non-negative.
-            record[name] = _validate_number(value, name, minimum=0.0)
-
-    engineered = pp.engineer_batch_features(
-        pd.DataFrame([record]),
-        median_cycle_time=float(
-            model.metadata["feature_engineering"]["median_cycle_time_days"]
-        ),
-    )
-    features_frame = engineered[list(model.metadata["features"])]
-
-    labels = [str(c) for c in model.pipeline.named_steps["model"].classes_]
-    proba = np.asarray(model.pipeline.predict_proba(features_frame), dtype=float)[0]
-    prediction = str(model.pipeline.predict(features_frame)[0])
-    confidence = float(proba[labels.index(prediction)])
-
-    result = {
-        "prediction": prediction,
-        "confidence": round(confidence, 4),
-        "probabilities": _probability_dict(labels, proba),
-        "explanation": _batch_explanation(engineered.iloc[0], prediction, confidence),
-        "model": model.metadata.get("model_name"),
-    }
-    log.info("predict_batch_risk: %s (confidence %.3f)", prediction, confidence)
-    return result
-
-
-def predict_batch_risk_frame(df: pd.DataFrame) -> pd.DataFrame:
-    """Score a whole batch register at once (MODEL 2).
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        One row per batch, carrying every column in ``ml.batch_risk.features``.
-        Extra columns (``batch_id``, for instance) are preserved.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Input columns plus ``prediction``, ``confidence`` and one
-        ``proba_<tier>`` column per risk tier.
-
-    Raises
-    ------
-    ValueError
-        If ``df`` is empty or missing a required feature column.
-    FileNotFoundError
-        If the model artefact has not been trained yet.
-    """
-    if not isinstance(df, pd.DataFrame):
-        raise ValueError(f"predict_batch_risk_frame expects a DataFrame, got {type(df).__name__}.")
-    if df.empty:
-        raise ValueError("predict_batch_risk_frame received an empty DataFrame.")
-
-    model = load_model(BATCH_MODEL)
-    raw_required = list(get_config().ml.batch_risk.features)
-    missing = set(raw_required) - set(df.columns)
-    if missing:
-        raise ValueError(f"Batch frame is missing required column(s): {sorted(missing)}")
-
-    prepared = _normalise_frame_categoricals(df, _known_categories(model))
-    engineered = pp.engineer_batch_features(
-        prepared,
-        median_cycle_time=float(
-            model.metadata["feature_engineering"]["median_cycle_time_days"]
-        ),
-    )
-    features_frame = engineered[list(model.metadata["features"])]
-
-    labels = [str(c) for c in model.pipeline.named_steps["model"].classes_]
-    proba = np.asarray(model.pipeline.predict_proba(features_frame), dtype=float)
-    predictions = np.asarray(model.pipeline.predict(features_frame)).astype(str)
-
-    out = df.reset_index(drop=True).copy()
-    out["prediction"] = predictions
-    out["confidence"] = proba.max(axis=1).round(4)
-    for index, label in enumerate(labels):
-        out[f"proba_{label}"] = proba[:, index].round(4)
-
-    log.info(
-        "predict_batch_risk_frame: scored %d batch(es) | mix %s",
-        len(out),
-        pd.Series(predictions).value_counts().to_dict(),
-    )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # MODEL 3 - late delivery risk on the real SCMS dataset
 # ---------------------------------------------------------------------------
@@ -753,7 +589,6 @@ def predict_late_delivery(**features: Any) -> dict[str, Any]:
 
 __all__ = [
     "DRUG_MODEL",
-    "BATCH_MODEL",
     "LATE_DELIVERY_MODEL",
     "KNOWN_MODELS",
     "LoadedModel",
@@ -761,8 +596,6 @@ __all__ = [
     "model_summary",
     "predict_drug",
     "predict_drug_batch",
-    "predict_batch_risk",
-    "predict_batch_risk_frame",
     "predict_late_delivery",
     "score_late_delivery_risk",
     "late_delivery_targeting_curve",

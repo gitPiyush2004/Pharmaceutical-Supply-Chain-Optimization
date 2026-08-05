@@ -28,22 +28,8 @@ _cfg = get_config().viz
 PALETTE: dict[str, str] = dict(_cfg.palette)
 #: Ordered colours for categorical series.
 SEQUENCE: list[str] = list(_cfg.sequence)
-#: Dark-to-light ramp used for the eight-stage supply chain funnel.
+#: Dark-to-light ramp used for the value and lateness funnels.
 FUNNEL_SCALE: list[str] = list(_cfg.funnel_scale)
-
-#: Colour by risk tier - kept consistent across stability, inventory and batch views.
-RISK_COLOURS: dict[str, str] = {
-    "Low": PALETTE["success"],
-    "Medium": PALETTE["warning"],
-    "High": PALETTE["danger"],
-    "Critical": "#8B1A13",
-}
-
-#: Colour by A/B test arm.
-ARM_COLOURS: dict[str, str] = {
-    "Control": PALETTE["neutral"],
-    "Treatment": PALETTE["primary"],
-}
 
 
 def register_template(name: str = "pharmachain") -> str:
@@ -143,11 +129,6 @@ def fmt_days(value: float, decimals: int = 1) -> str:
     return "-" if value is None else f"{float(value):.{decimals}f} d"
 
 
-def risk_colour(label: str) -> str:
-    """Colour lookup for a risk tier, defaulting to neutral grey."""
-    return RISK_COLOURS.get(str(label), PALETTE["neutral"])
-
-
 def status_colour(value: float, target: float, higher_is_better: bool = True) -> str:
     """Traffic-light colour for a metric measured against a target.
 
@@ -163,8 +144,8 @@ def status_colour(value: float, target: float, higher_is_better: bool = True) ->
 
 
 __all__ = [
-    "PALETTE", "SEQUENCE", "FUNNEL_SCALE", "RISK_COLOURS", "ARM_COLOURS",
+    "PALETTE", "SEQUENCE", "FUNNEL_SCALE",
     "register_template", "apply_theme",
     "fmt_units", "fmt_currency", "fmt_pct", "fmt_days",
-    "risk_colour", "status_colour",
+    "status_colour",
 ]

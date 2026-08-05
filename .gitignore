@@ -21,8 +21,6 @@ logs/
 # Streamlit local secrets
 .streamlit/secrets.toml
 
-# Local editor/agent launch config (contains machine-specific absolute paths)
-
 # OS
 .DS_Store
 Thumbs.db
@@ -37,5 +35,16 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Generated SQLite warehouse (rebuilt by `python scripts/build_dataset.py`)
-data/processed/*.db
+# Downloaded dataset cache.
+#
+# `drug200.csv` (8 KB) and the SCMS export (3.6 MB) are tracked, so the core of the
+# project works straight from a clone. The Indian medicine master is 30 MB, which is
+# a real cost on every clone for a file that is one command away, so it is fetched
+# instead:
+#
+#     python scripts/fetch_data.py
+#
+# `--verify` on that script reports what is cached and checks row counts, so a
+# truncated download fails loudly rather than putting wrong numbers on a page.
+data/external/indian_medicine_data.csv
+data/processed/

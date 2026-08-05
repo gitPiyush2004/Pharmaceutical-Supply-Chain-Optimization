@@ -3,23 +3,20 @@ Model training, tuning and evaluation for the PharmaChain ML package.
 
 Business purpose
 ----------------
-Three independent supervised problems share one training contract:
+Two independent supervised problems share one training contract:
 
 * **MODEL 1 - ``drug_classification``** - recommend one of five formulary drugs
   from a patient's age, sex, blood pressure, cholesterol level and serum
   sodium/potassium ratio (real Kaggle drug200 data).
-* **MODEL 2 - ``batch_risk``** - predict the Quality Assurance risk tier
-  (Low / Medium / High) a manufactured batch will attract, from the storage and
-  supply chain conditions it actually experienced (simulated telemetry).
-* **MODEL 3 - ``late_delivery``** - predict whether a shipment will arrive after
+* **MODEL 2 - ``late_delivery``** - predict whether a shipment will arrive after
   its scheduled date, trained on the **real** USAID SCMS delivery history of
   10,324 actual pharmaceutical shipments.
 
-All three are trained the same way: clean, engineer, split (stratified), tune
+Both are trained the same way: clean, engineer, split (stratified), tune
 three candidate families with ``GridSearchCV`` over the grids declared in
 ``config.yaml``, pick the winner by cross-validated score, then report a full
 held-out evaluation. Nothing is tuned on the test fold, and using one metric
-(macro F1) across all three keeps their numbers directly comparable.
+(macro F1) across both keeps their numbers directly comparable.
 
 What this module returns
 ------------------------
@@ -76,7 +73,7 @@ from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
 from src.config import ensure_directories, get_config, resolve_path
-from src.data.loader import load_batches, load_clinical
+from src.data.loader import load_clinical
 from src.logger import get_logger
 from src.ml import preprocess as pp
 
@@ -91,9 +88,9 @@ _MODEL_STEP = "model"
 # these; an unknown name is a configuration error, not a silent no-op.
 _SUPPORTED_MODELS: tuple[str, ...] = ("decision_tree", "random_forest", "xgboost")
 
-# Model names in `ml.batch_risk` are not declared in config (only the clinical
-# block lists them), so the batch model reuses the clinical candidate set - the
-# point of the comparison is the same three families in both problems.
+# Only the clinical block declares candidate families in config, so the
+# late-delivery model reuses that candidate set - the point of the comparison is
+# the same three families in both problems.
 _DEFAULT_MODELS: tuple[str, ...] = _SUPPORTED_MODELS
 
 
@@ -588,83 +585,11 @@ def train_drug_classifier(tune: bool = True) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# MODEL 2 - batch risk
+# MODEL 2 - late delivery on the real SCMS data
 # ---------------------------------------------------------------------------
-def train_batch_risk_classifier(tune: bool = True) -> dict[str, Any]:
-    """Train, tune and evaluate the manufacturing batch risk model (MODEL 2).
-
-    Uses only conditions that are observable *before* the QA verdict (storage
-    temperature and humidity, dwell time, cycle time, QA queue delay, supplier
-    reliability, product attributes and destination region) plus the derived
-    storage-stress features, so the model is a genuine forward-looking screen
-    rather than a restatement of the label.
-
-    Parameters
-    ----------
-    tune : bool, default True
-        Run the full grid search over ``ml.drug_classification.param_grid``
-        (the platform's single declared grid, shared by both tasks).
-
-    Returns
-    -------
-    dict
-        Same contract as :func:`train_drug_classifier`, with the addition of
-        ``extra['median_cycle_time_days']`` - the scaling constant that
-        inference must reuse.
-
-    Raises
-    ------
-    ValueError
-        If the configured feature list references a column that the batch table
-        does not provide.
-    """
-    cfg = get_config()
-    settings = cfg.ml.batch_risk
-    started = time.perf_counter()
-    log.info("=== MODEL 2 'batch_risk': training started ===")
-
-    raw = load_batches()
-    configured = list(settings.features)
-    missing = set(configured) - set(raw.columns)
-    if missing:
-        raise ValueError(
-            f"Batch table is missing configured feature(s): {sorted(missing)}"
-        )
-
-    # Captured before engineering so the exact denominator used at train time
-    # can be persisted and replayed for single-batch inference.
-    median_cycle_time = float(raw["total_cycle_time_days"].astype(float).median())
-    frame = pp.engineer_batch_features(raw, median_cycle_time=median_cycle_time)
-    numeric_features, categorical_features = pp.batch_feature_columns()
-
-    # Only the clinical block declares candidate families and grids; reuse them
-    # so every model is compared across the same three families.
-    grid_source = cfg.ml.drug_classification
-    model_names = list(settings.get("models", grid_source.get("models", _DEFAULT_MODELS)))
-    param_grids = dict(settings.get("param_grid", grid_source.get("param_grid", {})))
-
-    result = _train_classifier(
-        task_name="batch_risk",
-        frame=frame,
-        target=str(settings.target),
-        numeric_features=numeric_features,
-        categorical_features=categorical_features,
-        settings=settings,
-        param_grids=param_grids,
-        model_names=model_names,
-        tune=tune,
-        extra_metadata={"median_cycle_time_days": median_cycle_time},
-    )
-    log.info(
-        "=== MODEL 2 'batch_risk': finished in %.1fs ===", time.perf_counter() - started
-    )
-    return result
-
-
 def train_late_delivery_classifier(tune: bool = True) -> dict[str, Any]:
-    """Predict late delivery on the **real** USAID SCMS dataset (MODEL 3).
+    """Predict late delivery on the USAID SCMS dataset (MODEL 2 of 2).
 
-    This is the platform's only model trained on genuine operational data:
     10,324 real shipments of HIV and malaria commodities to 43 countries between
     2006 and 2015. The target is whether a line item arrived after its scheduled
     delivery date.
@@ -705,7 +630,7 @@ def train_late_delivery_classifier(tune: bool = True) -> dict[str, Any]:
     cfg = get_config()
     settings = cfg.scms.late_delivery_model
     started = time.perf_counter()
-    log.info("=== MODEL 3 'late_delivery' (real SCMS data): training started ===")
+    log.info("=== MODEL 2 'late_delivery' (real SCMS data): training started ===")
 
     frame = load_scms().copy()
 
@@ -753,7 +678,7 @@ def train_late_delivery_classifier(tune: bool = True) -> dict[str, Any]:
                 str(k): int(v) for k, v in frame[target].value_counts().items()},
         },
     )
-    log.info("=== MODEL 3 'late_delivery': finished in %.1fs ===",
+    log.info("=== MODEL 2 'late_delivery': finished in %.1fs ===",
              time.perf_counter() - started)
     return result
 
@@ -787,7 +712,7 @@ def save_artifacts(result: dict[str, Any], name: str) -> Path:
     ----------
     result : dict
         A training result from :func:`train_drug_classifier` or
-        :func:`train_batch_risk_classifier`.
+        :func:`train_late_delivery_classifier`.
     name : str
         Artefact stem, e.g. ``'drug_classification'``.
 
@@ -865,7 +790,7 @@ def save_artifacts(result: dict[str, Any], name: str) -> Path:
 
 
 def train_all(tune: bool = True) -> dict[str, dict[str, Any]]:
-    """Train, evaluate and persist all three platform models.
+    """Train, evaluate and persist both platform models.
 
     Parameters
     ----------
@@ -875,14 +800,13 @@ def train_all(tune: bool = True) -> dict[str, dict[str, Any]]:
     Returns
     -------
     dict
-        ``{'drug_classification': ..., 'batch_risk': ..., 'late_delivery': ...}``.
+        ``{'drug_classification': ..., 'late_delivery': ...}``.
     """
     started = time.perf_counter()
     log.info("train_all: starting full training run (tune=%s)", tune)
 
     trainers: dict[str, Callable[[bool], dict[str, Any]]] = {
         "drug_classification": train_drug_classifier,
-        "batch_risk": train_batch_risk_classifier,
         "late_delivery": train_late_delivery_classifier,
     }
     results: dict[str, dict[str, Any]] = {}
@@ -903,7 +827,6 @@ __all__ = [
     "LabelEncodedClassifier",
     "get_model",
     "train_drug_classifier",
-    "train_batch_risk_classifier",
     "train_late_delivery_classifier",
     "save_artifacts",
     "train_all",

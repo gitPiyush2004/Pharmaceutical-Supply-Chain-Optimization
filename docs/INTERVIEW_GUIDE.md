@@ -5,7 +5,7 @@ How to present this project, and how to answer the questions it invites.
 The goal is not to recite features. It is to show that you can take an ambiguous
 business problem, build something that answers it, and be honest about the limits of
 your own analysis. That last part is what separates a strong candidate from a
-competent one.
+competent one — and it is what this project is built around.
 
 ---
 
@@ -13,38 +13,32 @@ competent one.
 
 Use this when someone says *"tell me about a project."*
 
-> I built a pharmaceutical analytics platform with three parts.
+> I built a pharmaceutical analytics platform on three real public datasets — no
+> simulated data anywhere.
 >
-> **First, a machine learning pipeline** that predicts which of five drugs suits a
-> patient from their clinical readings — blood pressure, cholesterol, age and
-> sodium-to-potassium ratio. Full workflow: a data quality report that catches
-> missing values, duplicates and invalid entries; median and mode imputation;
-> encoding and standardisation; then a Decision Tree with balanced class weights,
-> because the classes are imbalanced almost six to one. It gets 98% accuracy with
-> per-class AUC above 0.96.
+> **The core of it** is 10,324 actual USAID shipments of HIV and malaria medicines to
+> 43 countries. $1.63 billion of commodity value, of which **$259 million arrives
+> late**. I traced where, then tested whether each difference was real.
 >
-> **Second, a supply chain funnel analysis** tracing product through eight stages.
-> Only about 63% of what's procured reaches a patient, and quality testing is the
-> bottleneck — it loses the most volume *and* takes the longest.
+> **The best finding is one I nearly got wrong.** The worst-performing fulfilment
+> route is the programme's own distribution centre — 11.9 points behind direct drop.
+> I almost reported that. Then I stratified by time period, and the gap is **1.9
+> points before 2011 and 20.5 after**. The channel didn't start weak, it collapsed.
+> Those two readings imply opposite actions — replace the channel, versus find out
+> what changed in 2011.
 >
-> **Third, A/B testing** on four operational fixes, using chi-square and
-> two-proportion z-tests to establish which produce a real improvement rather than
-> noise.
+> **Two ML pipelines.** Drug classification on the Kaggle clinical dataset, and
+> late-delivery prediction on the real shipments — where the accuracy is *worse* than
+> always guessing "on time", because only 11.5% are late. So I deployed it as a
+> ranking instead: reviewing the riskiest 20% catches 63% of late deliveries.
 >
-> Part of it runs on **real USAID data — 10,324 actual shipments to 43 countries**.
-> The most interesting finding came from there: I built a vendor scorecard expecting
-> a bad manufacturer, and the worst performer turned out to be their own internal
-> distribution channel. Then stratifying by year showed the pooled number was
-> **Simpson's paradox** — the channel didn't start weak, it collapsed after 2010.
->
-> It's a Streamlit dashboard, nine pages, backed by 104 tests.
+> Streamlit dashboard, nine pages, 137 tests.
 
 **Then stop.** Let them pick where to go. Whatever they ask about, you have depth.
 
-> **Two things to get in early:** say **"real data"**, and say **"balanced class
-> weights"**. The first differentiates you from every other portfolio project; the
-> second signals you understand imbalanced classification rather than just calling
-> `.fit()`.
+> **Two things to get in early:** say **"all real data"**, and say **"I nearly got
+> that wrong"**. The first differentiates you from every other portfolio project; the
+> second is the thing interviewers remember.
 
 ---
 
@@ -60,88 +54,129 @@ four transport modes and ten thousand shipments, nobody could say *where* the
 reliability problem actually was — so nobody knew where to spend money fixing it."
 
 **Act 2 — Getting the data honest first.**
-"USAID publishes this as open data, and it's genuinely messy in ways that matter.
-Freight cost is a text column containing things like `Freight Included in Commodity
-Cost` and cross-references like `See DN-304`. Dates are mixed formats in the same
-file. A standard completeness check scores it 99.3% complete and grade A — and that's
-wrong. Over half the purchase-order dates and 40% of freight costs are unusable
-strings sitting in text columns. So before any analysis I built a parser that
-classifies every ambiguous value and records *why* it couldn't be used."
+"USAID publishes this as open data, and it's messy in ways that matter. Freight cost
+is a text column containing things like `Freight Included in Commodity Cost` and
+cross-references like `See DN-304 (ID#:10589)`. A standard completeness check scores
+the file **99.3% complete and grade A** — and that's wrong. Over half the
+purchase-order dates and 40% of freight costs are unusable strings sitting in text
+columns. Perfectly non-null, completely unparseable.
 
-**Act 3 — The distinction that changed the analysis.**
-"The most important call was recognising that `N/A - From RDC` isn't missing data.
-It correctly records that no vendor purchase order existed, because those goods came
-from regional distribution centre stock. Five thousand rows. If I'd imputed those I'd
-have invented five thousand purchase orders that never happened. So I gave every
-gap a reason code — structural absence, genuinely missing, or cross-referenced — and
-excluded structural absences from the statistics rather than filling them in."
+So before any analysis I wrote a parser that classifies every ambiguous value and
+records *why* it couldn't be used."
+
+**Act 3 — The distinction that changed everything downstream.**
+"The most important call was recognising that `N/A - From RDC` **isn't missing
+data**. It correctly records that no vendor purchase order existed, because those
+goods came from distribution centre stock. Five thousand four hundred rows.
+
+I'd originally built a generic cleaning layer that mode-imputed every text column. On
+this file that would have invented 5,404 purchase orders that never happened, and
+every lead-time figure downstream would have been wrong. So I deleted the generic
+layer and gave every unusable value a reason code instead — structural absence,
+genuinely missing, or cross-referenced — and excluded structural absences from the
+statistics rather than filling them.
+
+Here's the part I like: **parsing the file correctly makes its quality score go
+down**, by 1.70 points, because honest nulls score worse on completeness than
+non-null garbage. There's a test asserting that negative sign. Any pipeline judged on
+'did the quality score improve' would be incentivised to leave the garbage in."
 
 **Act 4 — The finding, and catching myself getting it wrong.**
 "I built the vendor scorecard expecting a bad manufacturer. The worst performer was
-**their own regional distribution centre channel**, carrying $1.09 billion of product.
-I nearly reported that as an 11.9-point gap against direct-drop fulfilment.
+**their own regional distribution centre channel**, carrying $1.09 billion of
+product. I nearly reported an 11.9-point gap against direct-drop fulfilment.
 
-Then I stratified by time period, and the gap is **1.9 points before 2011 and 20.5
-points after**. It's Simpson's paradox. The channel didn't start weak — it collapsed
-after 2010 while direct drop held steady. The pooled number describes a permanent
+Then I stratified by time period: **1.9 points before 2011, 20.5 points after**. The
+channel degraded — it wasn't always weak. The pooled number describes a permanent
 structural gap that never existed, and it points at the wrong fix: this is a
 degradation to investigate, not a channel to replace.
 
-I only caught it because I stratified. That's now a function in the codebase rather
-than something I remembered to do once."
+If they know their statistics, get the name right before they correct you: **this is
+effect modification, not textbook Simpson's paradox.** Simpson's paradox needs the
+difference to *reverse sign*, and direct drop is ahead in both eras — what changes is
+the magnitude, by a factor of ten. My code distinguishes the two: `is_simpsons_paradox`
+requires a sign flip and returns False here, while `interaction_detected` returns
+True. Same practical consequence, different name, and being loose about it is exactly
+the sort of thing a good interviewer will pick up.
 
-**Act 5 — Making the model useful, not just accurate.**
-"I trained a model to predict late delivery. ROC AUC 0.84 — but its accuracy was
-*below* the majority-class baseline, because only 11.5% of shipments are late. Rather
-than tune toward a vanity number, I changed the decision rule: I built a gains curve
-showing that reviewing the top 20% by predicted risk catches 63% of all late
-deliveries. That's an expeditor's work queue, and it's genuinely deployable."
+I only caught it because I stratified. That's now a function in the codebase with a
+test that checks it fires on this case *and stays quiet on a synthetic stable effect*
+— a detector that fires on everything is worthless."
 
-**Act 6 — The honest bit.**
-"The manufacturing half — storage conditions, batch quality, inventory — is
-simulated, because SCMS doesn't cover manufacturing and no public dataset has
-per-batch telemetry. I label every simulated figure as simulated. And because I know
-that data's ground truth, I could verify the analytics actually work: I planted four
-findings in the generator and the tests assert the analysis recovers all four."
+**Act 5 — Making the model useful rather than accurate.**
+"I trained a model to predict late delivery. ROC AUC 0.85 — but its accuracy is
+*below* the majority-class baseline, because only 11.5% of shipments are late.
+Reported as a classifier it looks worse than a constant guess.
 
-That last act is the strongest thing you can say. Most candidates oversell. Naming
-your own limitation before you're asked signals seniority.
+Rather than tune toward a vanity number I changed the decision rule: a gains curve
+showing that reviewing the top 20% by predicted risk catches **63% of all late
+deliveries**, a 3.2× lift. That's an expeditor's work queue, and it's deployable.
+There's a test pinning both facts — that accuracy stays at or below baseline, and
+that the gains beat random — so nobody later 'improves' it by optimising the wrong
+metric."
+
+**Act 6 — The honest bit: what I deleted.**
+"An earlier version of this project had a third model predicting batch stability
+risk, and a manufacturing funnel. Both ran on data I'd generated myself, because no
+public dataset carries per-batch storage telemetry. I checked properly — Kaggle,
+openFDA, data.gov.in, CDSCO, Mendeley, Zenodo — and the one promising candidate
+turned out to be a simulation itself.
+
+So I deleted them. About a thousand lines, two dashboard pages and a model. The
+analysis was fine; the problem was that I could make the numbers say whatever I'd
+calibrated them to say. Two real models beat three when one is circular."
+
+That last act is the strongest thing you can say. Most candidates add. Being able to
+name what you *removed*, and why, signals judgement.
 
 ---
 
 ## 3. Numbers worth knowing cold
 
-Don't memorise everything. Memorise these — the real-data block especially.
+Don't memorise everything. Memorise the top block.
 
-### Real data (USAID SCMS) — lead with these
+### The delivery pipeline (USAID SCMS) — lead with these
 
 | Number | What it is |
 |---|---|
 | **10,324** | Real shipments, 2006–2015 |
 | **43 / 73 / 88** | Countries / vendors / manufacturing sites |
-| **$1.63B** | Total commodity value moved |
-| **88.5%** | Actual on-time delivery |
+| **$1.63B / $259M** | Commodity value moved / value arriving late |
+| **84.1% / 88.5%** | Value on time / shipments on time (they differ — late shipments skew large) |
 | **93.4% → 73.9%** | RDC channel on-time, pre-2011 vs post-2010 — the collapse |
-| **+1.9 → +20.5 pp** | RDC gap by era (pooled 11.9 pp is Simpson's paradox) |
-| **$1.68 vs $10.02** | Ocean vs air freight, per kg (82.5% vs 90.4% on-time) |
-| **44%** | Share of line items with a vendor PO date — the rest bypass vendor ordering |
+| **+1.9 → +20.5 pp** | RDC gap by era — pooled 11.9 pp is misleading (effect modification, *not* a sign reversal) |
 | **61% / 27% / 11.5%** | Arrive exactly on schedule / early / late |
-| **0.848** | Late-delivery model ROC AUC |
-| **63% at top 20%** | Late deliveries caught by reviewing the riskiest fifth (3.2× lift) |
+| **44%** | Line items with a vendor PO date — the rest bypass vendor ordering entirely |
+| **99.3% vs 60%** | Freight column completeness score vs actually usable |
 
-### Simulated manufacturing side
+### Statistics
 
 | Number | What it is |
 |---|---|
-| **63%** | End-to-end yield — units procured that reach a patient |
-| **~$127M** | Modelled value lost |
-| **8** | Funnel stages |
-| **19 days** | Mean quality-testing dwell (~28 for failed batches needing retest) |
-| **~4.7 pp** | Potency lost on a cold-chain excursion (p < 0.001) |
-| **0.98 / 0.988** | Clinical model test accuracy / macro F1 |
-| **0.745 / 0.702** | Batch risk test accuracy / macro F1 |
-| **4** | Interventions A/B tested |
-| **104** | Tests passing |
+| **p = 7.5e-80** | RDC vs direct drop, two-proportion z-test (z = −18.9) |
+| **p = 0.812** | First-line designation — a genuine null |
+| **1.82 pp** | Minimum detectable effect on that null (post-hoc power was 6% — the wrong tool) |
+| **0.44 vs 6.0e-10** | Welch vs Mann-Whitney on freight ratio by product group, same data |
+| **78** | Skewness of freight-as-share-of-value (mean 2,548%, median 10.6%) |
+
+### Machine learning
+
+| Number | What it is |
+|---|---|
+| **0.98 / 0.988 / 0.989** | Drug classification accuracy / macro F1 / AUC |
+| **99.5%** | CV accuracy ceiling at depth ≥ 4 (depth 3 reaches only 88.5%) — one patient |
+| **0.848** | Late-delivery ROC AUC |
+| **0.881 vs 0.885** | Late-delivery accuracy vs majority baseline — *below* it |
+| **63.3% at top 20%** | Late deliveries caught by the riskiest fifth (3.2× lift) |
+
+### Indian market
+
+| Number | What it is |
+|---|---|
+| **253,973 / 7,642** | Products / manufacturers |
+| **1.2% / 7.7% / HHI 12** | Largest firm's share / top ten / Herfindahl (concern threshold: 2,500) |
+| **8,992 brands, 2,413 makers** | Cefixime alone — ₹151 spread on identical composition |
+| **51 pp vs 1.1 pp** | Discontinuation spread by manufacturer vs by price quartile |
 
 If you forget a number, say *"I'd need to check the exact figure, but the order of
 magnitude was…"* That is a completely acceptable answer and far better than guessing.
@@ -152,31 +187,29 @@ magnitude was…"* That is a completely acceptable answer and far better than gu
 
 ### "Walk me through the drug classification pipeline."
 
-The most likely opening question. Have the sequence ready, and give a reason for
-each step rather than just naming it.
+The most likely opening question. Have the sequence ready, and give a reason for each
+step rather than just naming it.
 
 > Seven steps.
 >
 > **Data quality first.** I profile for missing values, duplicates, invalid
-> categories and impossible values. The published file is clean, so to actually
-> *test* the cleaning code I inject a controlled set of realistic defects — blank
-> fields, double-submitted records, `high` versus `HIGH`, a negative age — and check
-> the pipeline catches every one. Since I know the ground truth, that doubles as a
-> unit test.
+> categories and impossible values. This dataset is genuinely clean — verified zero
+> nulls, zero duplicates, nothing out of range — so I say that rather than dressing
+> up a no-op as remediation.
 >
 > **Cleaning, in a specific order.** Standardise text *before* imputing, because
-> otherwise the mode is computed over `high` and `HIGH` counted separately. Then
-> range checks, deduplication, and finally median imputation for numerics and mode
-> for categoricals. Median rather than mean because it's robust to the outliers I
-> just nulled.
+> otherwise the mode is computed with `high` and `HIGH` counted separately. Then
+> range checks, then median imputation for numerics and mode for categoricals. Median
+> rather than mean because it's robust to outliers.
 >
 > **Feature engineering.** Ordinal scores for blood pressure and cholesterol —
 > one-hot would throw away the ordering, which is real. A combined severity score.
-> And a binary flag at the Na/K threshold I found in the exploratory analysis, which
+> And a binary flag at the Na/K threshold I found in exploratory analysis, which
 > hands the model the known boundary instead of making it rediscover it.
 >
 > **Encoding and scaling inside one sklearn Pipeline**, so the scaler only ever sees
-> training folds and the serialised model carries its own preprocessing.
+> training folds and the serialised model carries its own preprocessing — train/serve
+> skew becomes structurally impossible rather than merely unlikely.
 >
 > **Stratified split**, because the smallest class is 8% of the data and an
 > unstratified split could leave barely any of it in the test set.
@@ -192,19 +225,45 @@ each step rather than just naming it.
 
 **If they ask "why not just use a Random Forest?"**
 
-> I compared them. Random forest actually edges it out slightly on the test split,
-> but they tie on cross-validated F1 — and CV is the criterion I committed to in
-> advance. On a 200-row dataset a single test split is noisy, so switching to
-> whichever model wins on it is exactly how leakage creeps in. The tree also gives me
-> readable rules, which in a clinical context is worth more than a fractional gain.
+> I compared them. Random forest actually edges it out on the test split, but the
+> decision tree wins on cross-validated macro F1 — and CV is the criterion I
+> committed to in advance. On a 200-row dataset a single test split is noisy, so
+> switching to whichever model wins on it is exactly how leakage creeps in. The tree
+> also gives readable rules, which in a clinical context is worth more than a
+> fractional gain.
+
+### "Your clinical model gets 98% accuracy. Isn't that suspicious?"
+
+Excellent question to get, because the honest answer is better than the number.
+
+> It would be suspicious if I claimed it was hard. **The label is a pure function of
+> the features** — I verified it, with zero exceptions in all 200 rows. If the
+> sodium-to-potassium ratio is at or above 15.015 the patient gets DrugY, and below
+> that threshold blood pressure, cholesterol and a single age cut at 50 resolve the
+> remaining four exactly. There's a test asserting that property, because the claim
+> depends on it.
+>
+> So 100% is *arithmetically attainable*, which means 98% isn't an achievement — it's
+> slightly below what the problem permits. I say that on the dashboard.
+>
+> What's genuinely interesting is *why* it isn't 100%. Cross-validated accuracy
+> plateaus at **99.5% for every depth from 4 upward**; depth 3 is too shallow to
+> express the rule at all and only reaches 88.5%. On 200 rows, 99.5% is exactly one
+> patient. The cause is sample size, not model capacity: the true boundary sits in
+> the narrow gap between 14.642 — the highest non-DrugY ratio — and 15.015, and a
+> tree fitted on 150 rows doesn't always place its split inside that gap. The single
+> test error is at Na/K 14.64, the boundary value itself.
+>
+> I also use the high accuracy as a **correctness check**: feature importances show
+> Na/K carrying about half the decision weight, which is exactly the rule I found in
+> EDA. If the model *hadn't* recovered that structure, I'd have a bug.
 
 ### "What did the error analysis actually tell you?"
 
 This is where you separate yourself. The answer is a *negative* result.
 
-> One patient out of fifty was misclassified — Na/K of 14.6, just under the 15
-> threshold, predicted DrugY when the actual was drugX. That's the expected place for
-> a tree to fail: a hard threshold can't express "close to the boundary."
+> One patient out of fifty, at the boundary — the expected place for a tree to fail,
+> because a hard threshold can't express "close to the line."
 >
 > But the important part is that it was wrong at **100% confidence**. A Decision Tree
 > grown to pure leaves reports every single prediction as certain, so the
@@ -212,167 +271,282 @@ This is where you separate yourself. The answer is a *negative* result.
 >
 > That matters practically. The obvious safety net in a clinical setting is a
 > confidence threshold: auto-accept above it, escalate to a pharmacist below it. I
-> built the routing table to test that, and it's completely flat — every row sits at
-> confidence 1.0, so no threshold separates anything. The fix is probability
+> built the routing table to test that idea, and it's completely flat — every row
+> sits at confidence 1.0, so no threshold separates anything. The fix is probability
 > calibration, Platt scaling or isotonic regression, or constraining leaf size.
 >
-> I found that by doing the error analysis. Reporting 98% accuracy and stopping would
-> have hidden it entirely.
-
-### "Which parts are real and which are simulated?"
-
-Answer this crisply and unprompted — volunteering it builds far more credibility than
-being caught by it.
-
-> Two of the three datasets are real. The **USAID SCMS delivery history is genuine
-> operational data** — 10,324 actual shipments, published as US Government open data —
-> and it drives all the procurement, vendor, logistics and freight analysis plus the
-> late-delivery model. The **Kaggle drug200 clinical dataset** is real too.
->
-> The **manufacturing side is simulated**: batch quality outcomes, storage temperature
-> and humidity, inventory snapshots. That's because SCMS records procurement and
-> logistics, not manufacturing — and no public dataset carries per-batch storage
-> telemetry, because that data doesn't leave a pharma company.
->
-> I had a choice there. I could have dropped the stability and inventory analytics
-> entirely, or pretended SCMS covered something it doesn't. Instead I built a
-> calibrated generator for exactly those gaps, and labelled every simulated figure as
-> simulated — in the dashboard and in the README.
-
-**If they push:** *"Doesn't the simulated half undermine it?"*
-
-> It would if I blurred them together. There's a dedicated Real-World SCMS page, the
-> models are labelled by data provenance, and the Home page opens by stating which is
-> which. The simulation earns its place two ways: it covers domains that otherwise
-> couldn't be shown at all, and because I know its ground truth I can *verify* the
-> analytics — I planted four structural signals in the generator and the test suite
-> asserts the analysis recovers all four. You can't do that with real data.
-
-### "What surprised you?"
-
-A great question to get. Have this ready — it is the best story in the project.
-
-> Twice, actually. First: I built the vendor scorecard expecting a bad manufacturer,
-> and the worst performer turned out to be **"SCMS from RDC"** — not a supplier at all,
-> but their own regional distribution centre channel, carrying $1.09 billion.
->
-> Second, and more usefully — I nearly reported that wrong. The pooled gap is 11.9
-> points, but stratified by era it's **1.9 points before 2011 and 20.5 after**. Textbook
-> Simpson's paradox. The channel degraded; it wasn't always weak. That completely
-> changes the recommendation: you investigate what changed around 2010, you don't
-> replace a channel that used to work fine.
->
-> And the machine learning corroborated it from a different direction — the top
-> feature in the late-delivery model is fulfilment route, ahead of transport mode or
-> destination. The model found the same thing without being told to look.
+> Reporting 98% accuracy and stopping would have hidden that entirely.
 
 ### "Your late-delivery model has worse accuracy than doing nothing. Why ship it?"
 
-If they spot this, they are testing whether you understand your own metrics.
+If they spot this, they're testing whether you understand your own metrics.
 
-> Because accuracy is the wrong metric, and I'd argue that's the most useful thing
-> the project taught me. Only 11.5% of shipments are late, so always predicting
-> "on time" scores 88.5%. My model gets 87.9% — marginally worse, and completely
-> useless as a comparison.
+> Because accuracy is the wrong metric, and that's the most useful thing this part of
+> the project taught me. Only 11.5% of shipments are late, so always predicting "on
+> time" scores 88.5%. My model gets 88.1% — marginally worse, and useless as a
+> comparison.
 >
 > The metrics that matter are ROC AUC, which is 0.85, and the gains curve. If an
 > expeditor has capacity to review a fifth of shipments, the model surfaces **63% of
-> everything that will actually be late** — over three times better than random.
-> That's a real operational tool.
+> everything that will actually be late** — 3.2× better than random.
 >
 > So the fix isn't a better model, it's a better decision rule: use the predicted
-> probability to rank and triage, not to make a binary call at 0.5. I show the gains
-> curve on the dashboard instead of leading with accuracy, precisely because leading
-> with accuracy here would be misleading.
+> probability to rank and triage, not to make a binary call at 0.5. The dashboard
+> leads with the gains curve precisely because leading with accuracy here would
+> mislead. And there's a test that pins the accuracy *below* baseline, so if someone
+> later tunes toward accuracy the suite tells them they've broken the point.
 
-### "Your clinical model gets 98% accuracy. Isn't that suspicious?"
+### "How did you avoid data leakage?"
 
-Excellent question to get, because the honest answer is impressive.
-
-> It would be suspicious if I claimed it was hard. The drug200 dataset has 200 rows
-> and an almost deterministic decision rule — if the sodium-to-potassium ratio is
-> above about 15, the patient gets DrugY, nearly regardless of anything else. Below
-> that, blood pressure and cholesterol separate the other four drugs.
+> Four things, and the fourth is the one specific to this dataset.
 >
-> So high accuracy is *expected*, and I say so on the dashboard. I actually use it as
-> a **correctness check**: my feature importances show Na/K carrying about half the
-> decision weight, which is exactly the rule I found in exploratory analysis. If the
-> model *hadn't* recovered that structure, I'd have a bug.
+> First, everything — imputation, encoding, scaling — lives inside a single sklearn
+> Pipeline, so the transformers only ever see training folds.
 >
-> The genuinely interesting model is the second one — batch risk — which gets a macro
-> F1 of about 0.70. That reflects real irreducible noise, and I'd be suspicious of
-> myself if it were much higher.
+> Second, I select on **cross-validated** score, never on the test set. On the
+> clinical model random forest scores slightly higher on my test split but the
+> decision tree wins on CV; the decision tree ships and the dashboard explains why.
+>
+> Third, the split is stratified and seeded.
+>
+> Fourth — and this is where a supply chain dataset will bite you — **almost every
+> lead-time column is computed from the delivery date**, which is the thing I'm
+> predicting. Quote-to-delivery, PO-to-delivery, delay in days: all leak. The only
+> safe one is the *scheduled* lead time, which is known at order time. I also
+> excluded vendor identity and manufacturing site: with 73 vendors, several appearing
+> a handful of times, the model would memorise suppliers instead of learning
+> transferable structure — and it couldn't score a vendor it had never seen.
+>
+> There's a test that reads the persisted feature list and fails if any of those
+> columns appear. Documenting leakage control in prose isn't the same as enforcing it.
 
-### "Walk me through how you avoided data leakage."
+### "Why is there no funnel of units through the supply chain?"
 
-> Three things. First, everything — imputation, encoding, scaling — lives inside a
-> single sklearn Pipeline, so the transformers only ever see training folds. You
-> physically can't leak test statistics into the fit.
+A great question, and the answer is the point.
+
+> Because this dataset can't support one, and I checked every quantity column before
+> concluding that. SCMS states `Line Item Quantity` once at order time and never
+> restates it at delivery. There's no ordered-versus-received pair, no scrap
+> quantity, no per-stage weight — and every line item in the file was ultimately
+> delivered. A chart showing units draining between stages would have been invented,
+> not measured.
 >
-> Second, I select on **cross-validated** score, never on the test set. There's a nice
-> example: on the clinical model, random forest actually scores slightly higher than
-> the decision tree on my test split, but the decision tree wins on cross-validated
-> F1. I ship the decision tree, and the dashboard explains why — picking whichever
-> model wins on the test set is exactly how leakage creeps in.
+> What *is* measurable is attrition in **timeliness**. So the funnel is value-based:
+> $1.63B ordered, 84.1% arriving on or before schedule, and each band is a strictly
+> tighter definition of "on time" than the one above it — which makes it monotone by
+> construction rather than by luck. There's a test asserting that.
 >
-> Third, the split is stratified and seeded, so class balance is preserved and the
-> split is reproducible.
+> The related decision I'm happier about: milestone coverage runs 74% → 44% → 100%,
+> and I draw it as a **stacked bar rather than a funnel**. A funnel shape would imply
+> shipments dropping out of the process, when actually a fulfilment route just has no
+> vendor order to record. There's a test asserting that series is *non*-monotone, so
+> if the data ever changed, the chart choice gets revisited instead of silently
+> becoming a lie.
+
+### "You reported a null result. How do you know the test wasn't just underpowered?"
+
+If you get this, you're talking to someone good. Have the answer ready.
+
+> By not using post-hoc power, which is the trap. Post-hoc power is computed at the
+> **observed** effect size, so it's a deterministic function of the p-value — a
+> genuine null mechanically returns low power no matter how large the sample. On my
+> null it reads 6%, which looks damning and means nothing. Using it to judge a null
+> is circular reasoning dressed up as a statistic.
+>
+> The right question is: given these sample sizes, **how large a gap would have shown
+> up?** That's the minimum detectable effect. On the first-line-designation
+> comparison — 3,294 against 7,030 shipments at an 88.5% baseline — it's 1.82
+> percentage points. So I can say the measured 0.16-point gap rules out any
+> difference larger than 1.82 points. That's a real, quotable bound.
+>
+> And it doesn't quite close the case, which I also say. A difference worth acting on
+> at that baseline is 1.33 points, just *inside* the detectable limit. So the verdict
+> is "no effect above 1.8 points" rather than a flat "no difference." The code has
+> three distinct null verdicts for exactly that reason — collapsing them loses the
+> useful part.
+
+### "How do you choose between a t-test and a non-parametric test?"
+
+> With a written rule rather than per-chart judgement, because on this data the
+> choice changes the answer completely. Freight as a share of commodity value has a
+> mean of 2,548% against a median of 10.6% — skewness of 78, driven by tiny line
+> values against real shipping costs. Compared across product group, **Welch returns
+> p = 0.44 and Mann-Whitney p = 6.0e-10 on the same data.** Welch is comparing means
+> the outliers have rendered meaningless.
+>
+> So the threshold lives in the config file: absolute skew above 2 and the rank-based
+> result is the one quoted. Both are always computed and shown.
+>
+> The subtlety I'd want to mention is that the disagreement runs in **both**
+> directions. Delivery delay by era: Welch is significant at p = 8e-06, Mann-Whitney
+> isn't at p = 0.45. Here *neither* is wrong. The mean delay moved from −5.0 to −7.5
+> days while both medians are exactly 0, because 61% of deliveries land on their
+> scheduled day. The change is in the tail, not the typical shipment. Calling Welch
+> "an artefact of outliers" there would be wrong, so the code returns "both" and says
+> the effect is a tail effect. That case is what convinced me a blanket rule needs a
+> stated exception rather than a silent one.
+
+### "Everything is real data now. What did you lose by dropping the simulation?"
+
+> Randomisation, and two analyses.
+>
+> The analyses were drug stability and batch-risk classification. Both needed
+> per-batch storage temperature and potency, and no public dataset has that — it
+> doesn't leave a pharma company. I checked Kaggle, openFDA, data.gov.in, CDSCO,
+> Mendeley and Zenodo. The most promising candidate, a biopharmaceutical
+> manufacturing dataset on Kaggle, turned out to be the IndPenSim simulation, so
+> using it would have swapped one simulation for another.
+>
+> The bigger loss is randomisation. What I have now are **observational
+> comparisons** — nobody assigned a shipment to a fulfilment route. So a difference
+> between groups identifies where to look, not what caused it. Every comparison on
+> the dashboard carries the confound that limits it, and adding a comparison
+> dimension in the code *requires* a confound string — it's not optional.
+>
+> Five confounds are worth naming if they push: INCO term is perfectly collinear with
+> fulfilment route, so they're the same split rather than two findings. Vendor lead
+> time is structurally 100% missing for RDC, so no lead-time test is possible across
+> that split. First-line designation perfectly predicts whether freight is available,
+> so freight comparisons across it are undefined. The `Unknown` transport mode is a
+> pre-2011 recording artefact with a 98.9% on-time rate — I exclude it, because
+> leaving it in would make "Unknown" the best-performing mode on the dashboard. And
+> transport mode is entangled with era, since Ocean is almost entirely post-2010.
+>
+> I'd rather explain a real confound than defend a synthetic effect.
+
+### "Show me something you got wrong."
+
+Have two answers. Both are true and both are better than a rehearsed weakness.
+
+> **The one that shipped wrong numbers.** All five SCMS date columns look like dates,
+> so I parsed them with one `dayfirst=True` rule. They're actually two formats:
+> `%m/%d/%y` for the quote and purchase-order dates, `%d-%b-%y` for the three
+> delivery dates. So `5/3/13` parsed as 3 May instead of 5 March. That produced 478
+> negative lead times and 1,128 purchase orders that appeared to precede their own
+> price quote. What caught it was the cross-field consistency check — not a null
+> check, not a range check, because every date was populated and every date was
+> valid. There are now regression tests naming both wrong figures.
+>
+> **The one where my premise was wrong.** I wrote a consistency rule asserting that a
+> product's active-ingredient count can't exceed its pack quantity. It flagged 7,886
+> Indian products as inconsistent — and every one was correct. A single vial of
+> Augmentin contains amoxicillin *and* clavulanic acid. I deleted the rule rather
+> than tuning its threshold, because the problem wasn't the threshold. That dataset
+> now reports zero cross-field invariants, which is the honest answer for a flat
+> catalogue with no derived quantities.
 
 ### "You used chi-square and a z-test. Why both?"
 
-> They answer the same question from different angles, so agreement between them is a
-> consistency check. The two-proportion z-test gives me a directional effect size with
-> a confidence interval, which is what a business case needs. Chi-square tests
-> independence between arm and outcome and gives me Cramér's V for association
+> They answer the same question from different angles, so agreement is a consistency
+> check. The two-proportion z-test gives a directional effect size with a confidence
+> interval, which is what a decision needs. Chi-square handles more than two groups —
+> useful for the four transport modes — and gives Cramér's V for association
 > strength.
 >
-> For a 2×2 table, chi-square should equal the z-statistic squared. I have a test that
-> asserts that. If they ever disagreed, I'd have an implementation bug.
+> For a 2×2 table chi-square should equal the z-statistic squared, and I have a test
+> asserting it. That test also guards a setting: SciPy applies Yates' continuity
+> correction to 2×2 tables by default, which breaks the equality and is
+> over-conservative at these sample sizes, so I disable it deliberately.
+>
+> I also report the minimum expected cell count on every chi-square. Below 5 the
+> approximation is unreliable, and the page says so rather than quoting a p-value the
+> reader will over-trust.
 
-### "How do you know an intervention is worth doing?"
+### "How do you know a difference is worth acting on?"
 
-> Statistical significance alone isn't enough, and that's the part people skip. With a
-> big enough sample, almost any difference becomes significant. So I require three
-> things.
+> Three bars, and the middle one is the one people skip.
 >
 > **Statistical significance** — the effect probably isn't noise.
-> **Adequate power** — the test *could* have detected the effect if it were there. This
-> matters because otherwise an inconclusive result gets misread as "no effect", when
-> really it means "we couldn't tell".
-> **Practical significance** — the lift is big enough to be worth the capital.
+> **Adequate sensitivity** — the test *could* have detected an effect worth acting on.
+> Measured as a minimum detectable effect, not post-hoc power.
+> **Practical significance** — the difference is big enough to be worth the cost of
+> change.
 >
-> Only interventions clearing all three get an ADOPT recommendation. And I report the
-> value as *gross* benefit — it excludes implementation cost, so it's not an ROI, and I
-> say that explicitly.
+> With a big enough sample almost any difference becomes significant, so the third
+> bar does real work. There's a test asserting that a genuine 0.2-point gap on
+> 500,000 rows returns **DO NOT ACT** — statistically real, too small to matter.
+>
+> On money: there is exactly **one assumed number** in the whole project, an SLA
+> penalty per late shipment in the config file, because SCMS records no penalty or
+> expediting cost. Everything it multiplies is measured. I isolated it there so it's
+> obvious which figures depend on an assumption, and I don't dress it up with a net
+> present value or a confidence interval — that would give an assumption the
+> appearance of a measurement.
+
+### "Why does a grade-A data quality score matter to you?"
+
+> Because it's wrong, and the way it's wrong is instructive. Generic profiling asks
+> whether cells are populated, unique and in range. It cannot ask whether a populated
+> cell *means* anything. SCMS scores 99.3% complete and grade A while 55% of its
+> purchase-order dates and 40% of its freight costs are unusable text.
+>
+> The demonstration I'm proudest of is that **parsing the file correctly lowers its
+> score by 1.70 points**, because unparseable strings count as complete and the nulls
+> that replace them don't. That negative number means the generic metric *rewards* a
+> file for holding non-null garbage. There's a test asserting the sign stays negative
+> — if it ever turned positive it would mean my parser had started imputing instead
+> of nulling, which is a silent and serious regression.
+>
+> The Indian dataset moves the other way, which is the control: there parsing
+> genuinely recovers information — a price column stored as text becomes a number,
+> free-text pack labels become a form and a quantity — so the score goes up. And
+> drug200 is flat at zero, because it's published clean and I didn't manufacture a
+> difference to make the comparison look better.
+
+### "Why report the Indian market data descriptively instead of modelling it?"
+
+> Because the obvious model would have been a lie with a confidence score attached.
+> The file has 253,973 rows and an `Is_discontinued` flag, so training a classifier
+> is the reflexive move. Three reasons not to:
+>
+> The `type` column has exactly one value — `allopathy` — across all 253,973 rows, so
+> it carries no information. The target is 31:1 imbalanced. And the file has no
+> launch date, no sales volume and no therapeutic class: the features that would
+> actually predict a withdrawal decision are simply absent.
+>
+> What settled it was looking at where the variance is. Discontinuation varies by
+> **51 percentage points between manufacturers** but only **1.1 points across price
+> quartiles**. A manufacturer effect that large with essentially no price effect isn't
+> product economics — it's catalogue refresh timing in the source. Some firms have
+> pruned their listings and some haven't. A model would have learned which
+> manufacturers happen to have tidied their catalogue, dressed up as withdrawal risk.
+>
+> So the dataset drives market structure instead, which it genuinely supports: 7,642
+> manufacturers, a Herfindahl index of 12 against a regulatory concern threshold of
+> 2,500, and Cefixime alone sold under 8,992 brand names with a ₹151 spread between
+> price quartiles on identical composition. That last one is an actionable
+> procurement finding.
 
 ### "What was the hardest technical problem?"
 
-Have a real answer. This one is genuinely good:
-
-> Imputation, oddly. About 5% of storage temperature readings were missing — realistic,
-> because cold-chain data loggers do drop out.
+> Deciding what a missing value *means*, before deciding what to do about it.
 >
-> The naive fix is to impute with the median. But the portfolio median is around 25 °C,
-> because most products are stored at room temperature. Cold-chain products sit at
-> 2–8 °C. So imputing globally would have invented a 20-degree temperature excursion
-> on batches that never had one — and that fabricated excursion would then propagate
-> into my stability model, my risk labels, and every conclusion downstream.
+> The SCMS purchase-order date column has 5,404 blanks out of 10,324 — 52%. Every
+> instinct and every tutorial says impute, and my own code did: I'd written a generic
+> cleaning layer that mode-imputed every text column, for every table.
 >
-> So I impute **within group**: cold-chain temperatures from cold-chain batches,
-> humidity by region, transit times by transport mode. And where the true value is
-> actually knowable, I don't impute at all — supplier reliability is an attribute of
-> the *supplier*, so I restore it by lookup from the dimension table. Repair beats
-> guessing whenever the value is recoverable.
+> But those aren't gaps. `N/A - From RDC` records that no purchase order *existed*,
+> because the goods came from distribution centre stock. Imputing would have
+> fabricated 5,404 purchase orders, and every lead-time statistic downstream would
+> have been computed over shipments that never had the milestone being measured.
 >
-> I have tests for both. One asserts the cold-chain mean stays below 12 °C after
-> cleaning; another asserts the repaired reliability values match the dimension exactly.
+> The fix was structural rather than a tweak. I deleted the generic cleaning layer
+> entirely and replaced it with per-dataset parsing that attaches a reason code to
+> every value it can't use — `parsed`, `structural`, `missing`, `cross_reference`.
+> Then every function that reports a lead time also reports the denominator it
+> actually used. That's why the dashboard says "measured on 44% of line items" instead
+> of quoting one number.
+>
+> The lesson that generalised: **a cleaning step that can't tell you why a value was
+> absent shouldn't be allowed to fill it in.**
 
 ### "Why Streamlit and not a BI tool?"
 
-> Because a chunk of what this platform does isn't expressible in a BI tool. The
-> stability page fits an OLS degradation model and solves it for a shelf-life estimate.
-> The A/B page runs power analysis. The simulation page propagates seven levers through
-> an elasticity model live. Those need Python in the request path.
+> Because a lot of what this does isn't expressible in a BI tool. The statistical
+> testing page runs power analysis and minimum-detectable-effect calculations live.
+> The comparison engine chooses between a t-test and a rank test based on measured
+> skew. The ML page renders calibration and gains curves from persisted model
+> metadata. Those need Python in the request path.
 >
 > If the deliverable were fixed reporting on a warehouse, I'd use Power BI or Tableau
 > and it'd be the right call.
@@ -381,44 +555,58 @@ Have a real answer. This one is genuinely good:
 
 > Four things, roughly in order.
 >
-> **Orchestration** — the CLI scripts become scheduled tasks in Airflow or Dagster, with
-> the data quality check as a gate that fails the run rather than a report someone
-> reads later.
+> **Orchestration** — the CLI scripts become scheduled tasks in Airflow or Dagster,
+> with the data quality check as a **gate that fails the run**, not a report someone
+> reads later. That matters more here than usual: the date-parsing bug would have
+> been caught by the consistency check on day one if it had been a gate.
 >
-> **Real warehouse** — SQLite becomes Postgres or BigQuery. The SQL layer is already
-> separated, so that's a connection change.
+> **A warehouse** — the CSV cache becomes Postgres or BigQuery. The loader is already
+> the single entry point, so that's one module.
 >
 > **Model registry and monitoring** — MLflow for versioning, plus drift detection on
-> input distributions. My batch risk model depends on storage conditions, and if the
-> network changes its cold-chain policy the model silently goes stale.
+> input distributions. This matters specifically because my own analysis shows the
+> network changed materially in 2011; a model trained across that boundary is
+> averaging two regimes, and a fresh one would need the same check.
 >
 > **Serving** — the prediction interface becomes a FastAPI endpoint. It's already a
 > clean function returning a dict, so that's thin.
 
 ### "What would you do differently?"
 
-> Two things.
+> Two things, and the second is a real weakness in what I'm claiming.
 >
-> I'd reach for **survival analysis** on the shelf-life question instead of OLS on
-> potency. What I actually care about is *time until a batch goes out of specification*,
-> which is a time-to-event problem with censoring — plenty of batches never fail within
-> the observation window. Cox regression handles that properly; my linear model doesn't.
+> **I'd resolve the freight cross-references instead of discarding them.** 2,445 rows
+> carry freight as `See DN-304 (ID#:10589)` — and that embedded ID is a resolvable
+> reference to another row in the same file. So those values are *recoverable* by a
+> self-join, not lost. I classified them correctly as `cross_reference` and excluded
+> them, which is honest but leaves 24% of the freight data on the table.
 >
-> And I'd add a **discrete-event simulation** to sanity-check the main recommendation.
-> My elasticity model says compressing quality testing improves throughput, but it has
-> no concept of capacity or queueing — so it can't tell me whether I'd just be moving
-> the bottleneck to packaging. That's a real weakness in the advice I'm giving.
+> **I'd try to identify what changed in 2011.** My headline finding localises a
+> service collapse in time and I stop there, because the dataset can't explain it.
+> What I'd want is a difference-in-differences design using the country mix — if the
+> RDC channel's destination portfolio shifted after 2010, the "collapse" might partly
+> be composition rather than degradation. I state that limitation rather than
+> resolving it, and it's the single most valuable open question in the project.
 
-### "How did you decide what to test?"
+### "How did you decide which comparisons to run?"
 
-> I let the funnel analysis pick. Quality testing was the worst stage on both volume
-> and time, so automated quality testing was the obvious first candidate. Cold-chain
-> excursions showed a large, significant potency effect in the stability analysis, so
-> IoT monitoring was second. The regional analysis showed one region well below OTIF
-> target, which pointed at route optimisation.
+> I let the data pick, then constrained it. The pipeline analysis shows where value
+> arrives late; each dimension that could explain it becomes a comparison. But two
+> rules keep it from becoming p-hacking.
 >
-> The observational analysis generates hypotheses; the experiments test them. Running
-> experiments on interventions the data hadn't already flagged would be guessing.
+> First, a group needs at least 30 shipments to be reported at all — below that a
+> single late delivery swings the rate by several points.
+>
+> Second, and more importantly, adding a comparison dimension in the code requires
+> supplying its **confound**. It's a required field, not a comment. That's a
+> deliberate design choice: it means nobody, including future me, can add a
+> comparison to the dashboard without having thought about what limits it.
+>
+> The catalogue is sorted by effect size but the recommendations aren't. Destination
+> region shows the widest gap — 12.7 points, Asia against West & Central Africa — and
+> it's the least actionable, because the programme doesn't choose where medicines are
+> needed. A dashboard that ranks findings purely by effect size points an
+> organisation at things it can't change.
 
 ---
 
@@ -426,66 +614,77 @@ Have a real answer. This one is genuinely good:
 
 Nine pages, but you only need five. Don't wander.
 
-1. **Home** — "Three pieces of work, and I label which data is real." *Ten seconds.*
-2. **ML Models → Drug Classification** — the headline. Show the confusion matrix,
-   then the feature importance: "Na/K carries about half the decision weight, which
-   is exactly the rule I found in EDA — the model recovering known structure is a
-   correctness check."
-3. **Funnel Analytics** — "Only 63% of procured units reach a patient." Show the
-   funnel, then the bottleneck table: "quality testing is worst on both volume and
-   time."
-4. **Real-World Operations** — "This half is real: 10,324 actual USAID shipments."
-   Show the vendor scorecard: "I expected a bad manufacturer. It's their own
-   internal channel — and here's the stratified view showing the pooled number was
-   Simpson's paradox."
-5. **A/B Testing** — "And this is how I'd decide whether a fix is worth the money."
-   Show the confidence interval, then the power analysis.
+1. **Home** — "Three real datasets, no simulation." *Ten seconds.*
+2. **Delivery Pipeline** — "$259M arrives late. And there's no unit funnel here on
+   purpose — the dataset states quantity once and never restates it, so an attrition
+   chart would be invented." Show the value funnel and the lateness thresholds.
+3. **Statistical Testing** — the centrepiece. Show the RDC comparison, then scroll to
+   the stratified chart: "I nearly reported the pooled 11.9 points. Stratified by era
+   it's 1.9 then 20.5 — effect modification, and the page is explicit that it isn't a
+   sign reversal." Then the null-result section: "and here's how to report a
+   non-result properly, using a minimum detectable effect rather than post-hoc
+   power."
+4. **ML Models → Late Delivery** — "Accuracy below baseline. Here's why I ship it
+   anyway." Show the gains curve.
+5. **Data Quality** — "The generic profiler grades this file an A, and it's wrong.
+   Parsing it correctly makes the score go *down*."
 
-If there's time, **Data Quality** is the best supporting page: the generic profiler
-scores the real SCMS file 99.3% complete and grade A, and it's wrong.
+If there's time, **Insights** is the best closer — every finding carries a "does not
+establish" column.
 
 Let questions redirect you. Curiosity is a buying signal.
 
 ## 6. Résumé bullets
 
-Grounded in what the project actually does, leading with the real data:
+Grounded in what the project actually does:
 
-> - Analysed **10,324 real USAID pharmaceutical shipments** (43 countries, 73 vendors,
->   $1.63B commodity value) using **Python (Pandas, Plotly)**, building a procurement
->   funnel and vendor scorecard that identified an internal distribution channel — not
->   an external supplier — as the weakest link, and used stratified analysis to show the
->   apparent 11.9pp service gap was Simpson's paradox masking a post-2010 collapse
->   from 93.4% to 73.9% on-time.
-> - Built an end-to-end **machine learning pipeline** across three models — drug
->   classification, batch stability risk, and late-delivery prediction on real shipment
->   data — with group-wise imputation, leakage-controlled feature engineering and
->   grid-searched selection across Decision Tree, Random Forest and XGBoost under
->   stratified cross-validation (**ROC AUC 0.85**; top-20% risk targeting captures 63%
->   of late deliveries, a 3.2× lift).
-> - Designed and executed **A/B experiments** on four supply chain interventions using
->   **Chi-Square tests, two-proportion z-tests and Welch's t-tests (SciPy)** with power
->   analysis and practical-significance gating, delivered through a 9-page interactive
->   **Streamlit** dashboard backed by 104 automated tests.
+> - Analysed **10,324 real USAID pharmaceutical shipments** (43 countries, 73
+>   vendors, $1.63B commodity value) in **Python (Pandas, NumPy, Plotly)**, building
+>   an order-to-delivery pipeline analysis that quantified **$259M of commodity value
+>   delivered late** and identified an internal distribution channel — not an external
+>   supplier — as the weakest link; used **stratified analysis** to show the apparent
+>   11.9pp service gap masked a post-2010 collapse from 93.4% to 73.9% on-time (a
+>   ten-fold interaction with era that the pooled figure hid entirely).
+> - Built two end-to-end **machine learning pipelines** on real data — drug
+>   classification (Decision Tree, balanced class weights, 5 classes, 0.988 macro F1)
+>   and late-delivery prediction (XGBoost, **ROC AUC 0.85**) — with leakage-controlled
+>   feature engineering, grid-searched selection across Decision Tree, Random Forest
+>   and XGBoost under stratified cross-validation, and gains-curve deployment
+>   (**top-20% risk targeting captures 63% of late deliveries, 3.2× lift**) after
+>   demonstrating that accuracy fell below the majority-class baseline.
+> - Designed a **statistical testing framework** (SciPy, statsmodels) using
+>   **two-proportion z-tests, chi-square, Welch's t-test and Mann-Whitney U** with
+>   power analysis, minimum-detectable-effect bounds for null results, and
+>   practical-significance gating — delivered through a **9-page Streamlit dashboard**
+>   over three real datasets (253,973-product market analysis included), backed by
+>   **137 automated tests**.
 
 ## 7. Things not to do
 
-**Don't blur real and simulated.** Two datasets are genuinely real; the
-manufacturing telemetry is not. Say which is which before you're asked — being caught
-conflating them costs you far more than volunteering it ever could.
+**Don't lead with accuracy on either model.** On the clinical model the label is a
+pure function of the features, so 98% is below what's attainable. On the
+late-delivery model accuracy is literally worse than doing nothing. Lead with the
+stratified RDC finding and the gains curve.
 
-**Don't lead with accuracy on either model.** On the clinical model it's a 200-row dataset with a deterministic rule; on the
-late-delivery model accuracy is literally worse than doing nothing. Lead with the RDC
-finding and the gains curve.
+**Don't claim causation.** These are observational comparisons. Say "observational"
+out loud once, early — it costs you nothing and buys a lot of credibility with anyone
+who was about to test you on it.
+
+**Don't call the RDC finding Simpson's paradox.** It's effect modification — the gap
+never reverses sign. The distinction is small, the code already makes it, and getting
+it right in conversation is free. Overstating it is the one place in this project
+where a sharp interviewer could catch you out.
 
 **Don't list the tech stack unprompted.** "I used Pandas, NumPy, scikit-learn,
 XGBoost…" tells them nothing. They can read the README. Talk about the *problem*.
 
-**Don't hide the batch risk model's 0.70 F1.** Volunteer it and explain why a higher
-number would worry you. Knowing when a model is *good enough* and when it's
-suspiciously good is a senior skill.
+**Don't oversell the data quality score.** The interesting thing is that the score is
+*wrong*, not that it's high. If you present grade A as an achievement you've missed
+your own finding.
 
-**Don't claim ROI.** You have gross benefit, not net. Say "gross benefit, excluding
-implementation cost" and you sound rigorous instead of hand-wavy.
+**Don't claim ROI.** You have gross benefit against one assumed penalty rate. Say
+"gross benefit, one assumed SLA rate, everything else measured" and you sound
+rigorous instead of hand-wavy.
 
 ---
 
@@ -493,18 +692,29 @@ implementation cost" and you sound rigorous instead of hand-wavy.
 
 Places where you have real depth, if the conversation goes technical:
 
-- **The degradation model** — simplified Arrhenius relationship, temperature excess above
-  labelled storage condition, humidity threshold effect, interpretable coefficients with
-  physically correct signs, solved for the specification crossing to get a shelf-life
-  estimate. R² around 0.74.
-- **`thermal_load`** — the engineered interaction (excess temperature × exposure days)
-  that turns out to be the top predictor of batch risk, ahead of raw duration. Explains
-  *why* you engineered it: degradation depends on temperature and time jointly.
-- **The bronze/silver split** — six ordered cleaning steps, full remediation audit trail,
-  measured quality uplift, and the reason profiling the *raw* layer matters (auditing the
-  clean table scores your cleaning code, not the data).
-- **Forecast backtesting** — why the naive moving-average baseline is included on purpose,
-  and why bias is reported separately from MAPE (over-forecasting becomes expiry
-  write-off, under-forecasting becomes stock-out; MAPE hides the direction).
-- **Configuration design** — every threshold in one auditable YAML file, so sensitivity
-  testing is a config edit and a reviewer can check every assumption in one place.
+- **Reason-coded provenance** — the four codes (`parsed`, `structural`, `missing`,
+  `cross_reference`), why structural absence is categorically different from a gap,
+  and how every downstream statistic reports its own denominator as a result.
+- **Minimum detectable effect vs post-hoc power** — why the latter is circular on a
+  null, how the MDE inverts the arcsine transform around the baseline rate to express
+  a detectable Cohen's h as a rate difference, and the three distinct null verdicts
+  the code produces.
+- **Effect modification versus Simpson's paradox** — why a sign flip is the defining
+  criterion for the latter, why both make a pooled average misleading, and how the
+  detector distinguishes them (`sign_flip` versus a gap range exceeding half the
+  pooled gap).
+- **Both directions of Welch/Mann-Whitney disagreement** — outlier masking versus a
+  tail-only shift, and why a blanket "use the rank test when skewed" rule needs a
+  stated exception rather than a silent one.
+- **Gains and lift as the deployment metric** — why a ranking metric is the right
+  frame for a 88.5/11.5 split, how the curve is computed on the reproduced test split
+  rather than all rows (that was a leakage bug I fixed), and what capacity assumption
+  the 20% figure encodes.
+- **Probability calibration** — why a tree grown to pure leaves produces degenerate
+  probabilities, what that breaks operationally, and the two standard fixes.
+- **Herfindahl index on listing share** — what it measures, why 12 against a 2,500
+  threshold means fragmentation, and why a Pareto chart with a fixed 80% line would
+  have been actively misleading on a market this flat.
+- **Configuration design** — every threshold in one auditable YAML file, including the
+  two that decide *how a statistic gets reported* (`skew_limit`, `min_group_size`), so
+  that choice is written down once instead of made per chart.
