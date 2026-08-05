@@ -82,8 +82,9 @@ else:
 section(
     "What The Notebook Covers",
     "An end-to-end supervised classification pipeline on the Kaggle drug200 "
-    "dataset: predicting which of five drugs suits a patient from their clinical "
-    "readings.",
+    "dataset, and nothing else: recommending which of five drugs suits a patient "
+    "from their clinical readings. Most of the notebook is the data quality and "
+    "cleaning work that comes before the model.",
 )
 
 sections = pd.DataFrame([
@@ -97,7 +98,8 @@ sections = pd.DataFrame([
     ("4. Cleaning",
      "Text standardisation, range checks, deduplication, then median imputation "
      "for numerics and mode imputation for categoricals, with a verification step "
-     "asserting every injected defect was caught."),
+     "asserting every injected defect was caught — and a documented decision log "
+     "recording what was done to each issue and why, before any model is fitted."),
     ("5. Exploratory analysis",
      "Find the real decision boundary: Na/K above ~15 routes almost every patient "
      "to DrugY; below it, blood pressure and cholesterol separate the rest."),
@@ -127,8 +129,6 @@ sections = pd.DataFrame([
     ("14. Serialisation",
      "Persist the complete pipeline with joblib and expose a prediction function, "
      "validated against known patients."),
-    ("15. Extension",
-     "A short tour of the wider platform: the supply chain funnel and A/B testing."),
 ], columns=["section", "contents"])
 show_table(sections, height=440, prettify=False)
 
@@ -169,17 +169,20 @@ shows *how it was computed* for someone checking the work.
 
 **Colab specifics.** The first cell clones the repository and installs
 `requirements.txt`, so the notebook is self-contained on a fresh runtime. It runs
-in a couple of minutes, most of that the grid search in Section 13.
+in about a minute, most of that the grid search in Section 13.
 
-**Scope.** The notebook is deliberately focused on the drug classification
-pipeline. Section 15 adds three short demonstrations on the real supply chain data -
-the value funnel, the stratified comparison and the bounded null result - but the
-vendor, logistics and market analysis lives in the dashboard rather than being
-duplicated here.
+**Scope.** The notebook covers the drug200 dataset **only** — no other dataset is
+loaded, imported or referenced. The supply chain and market analysis lives on the
+other pages of this dashboard rather than being mixed into a clinical notebook.
 
-**Data.** `drug200.csv` is tracked in the repository, so the notebook's core sections
-need no download. Section 15 pulls the USAID SCMS file on first use and caches it, so
-a fresh Colab runtime fetches it once.
+**Data.** `drug200.csv` is tracked in the repository, so the notebook needs no
+download step and runs on a fresh Colab runtime immediately.
+
+**Where the effort went.** Sections 3 and 4 — data quality and cleaning — are the
+largest part of the notebook. The published file is clean, so realistic ingestion
+defects are injected into a copy and the pipeline is required to catch every one.
+That makes the cleaning code testable against known ground truth instead of
+eyeballed.
 """)
 
 sidebar_about()
