@@ -1,9 +1,14 @@
 """
 Google Colab page.
 
-Links to the reproducible drug classification notebook and documents what it
-covers, so a reviewer can re-run the full ML pipeline in a browser with no local
+Links to the reproducible drug recommendation notebook and documents what it
+covers, so a reviewer can re-run the whole pipeline in a browser with no local
 setup.
+
+The notebook is deliberately scoped to the ``drug200`` dataset alone - it loads,
+imports and references nothing else. That is why the run instructions below are
+split in two: the notebook needs only a clone, while the dashboard needs the
+external datasets and the trained models.
 """
 
 from __future__ import annotations
@@ -29,7 +34,8 @@ cfg = get_config()
 page_setup(
     title="Google Colab Notebook",
     icon="📓",
-    subtitle="The complete drug classification pipeline, reproducible in a browser",
+    subtitle="Drug recommendation from patient clinical indicators - the complete "
+             "pipeline, reproducible in a browser",
 )
 
 GITHUB_USER = "gitPiyush2004"
@@ -90,11 +96,14 @@ section(
 sections = pd.DataFrame([
     ("1-2. Setup and the data",
      "Load drug200: 200 patients, five clinical features, five drug classes. "
-     "Quantify the class imbalance and establish the majority-class baseline."),
+     "Quantify the class imbalance (roughly 6:1, DrugY 45% against drugB 8%) and "
+     "establish the majority-class baseline of 45.5% that any model must beat."),
     ("3. Data quality assessment",
-     "Profile the published file, then inject a controlled set of realistic "
-     "defects — missing values, duplicates, invalid categories, impossible ages — "
-     "so the cleaning pipeline can be tested against known ground truth."),
+     "Profile the published file (grade A, and the notebook says why that is not "
+     "impressive), then inject a controlled set of realistic defects into a copy — "
+     "missing values, duplicate submissions, inconsistent free-text categories, "
+     "impossible ages — so the cleaning pipeline is tested against known ground "
+     "truth rather than eyeballed."),
     ("4. Cleaning",
      "Text standardisation, range checks, deduplication, then median imputation "
      "for numerics and mode imputation for categoricals, with a verification step "
@@ -144,16 +153,37 @@ callout(
 )
 
 # ---------------------------------------------------------------------------
-section("Running It Locally")
+section(
+    "Running It Yourself",
+    "The notebook and the dashboard have different requirements, so they are listed "
+    "separately. The notebook needs neither a download nor a training step.",
+)
 
-st.code(f"""git clone https://github.com/{GITHUB_USER}/{GITHUB_REPO}.git
+tab_notebook, tab_dashboard = st.tabs(["Run the notebook", "Run this dashboard"])
+
+with tab_notebook:
+    st.code(f"""git clone https://github.com/{GITHUB_USER}/{GITHUB_REPO}.git
 cd {GITHUB_REPO}
-python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python scripts/fetch_data.py        # download and cache the two external datasets
+jupyter notebook {NOTEBOOK}""", language="bash")
+    st.caption(
+        "No `fetch_data.py` and no `train_models.py`. `drug200.csv` is tracked in "
+        "the repository, so the notebook runs immediately — it trains its own model "
+        "in-notebook and does not read the persisted artefacts.")
+
+with tab_dashboard:
+    st.code(f"""git clone https://github.com/{GITHUB_USER}/{GITHUB_REPO}.git
+cd {GITHUB_REPO}
+pip install -r requirements.txt
+
+python scripts/fetch_data.py        # cache the external datasets (needed here)
 python scripts/train_models.py      # train and persist both models
 streamlit run app/Home.py           # launch this dashboard""", language="bash")
+    st.caption(
+        "The dashboard's other pages read the larger datasets and the persisted "
+        "model artefacts, so both steps are required here even though the notebook "
+        "does not need them.")
 
 callout(
     f"Everything is seeded with `random_seed={cfg.project.random_seed}`, so a clean "
@@ -167,22 +197,32 @@ methodology("""
 dashboard answers *what is happening* for someone making a decision; the notebook
 shows *how it was computed* for someone checking the work.
 
-**Colab specifics.** The first cell clones the repository and installs
-`requirements.txt`, so the notebook is self-contained on a fresh runtime. It runs
-in about a minute, most of that the grid search in Section 13.
+**Colab specifics.** The first cell detects Colab, and only then clones the
+repository and installs `requirements.txt` — run locally it instead walks up to the
+repository root, so the same notebook works in both places unchanged.
+
+**Runtime.** The analysis itself takes about **5 seconds** end to end, measured — 200
+rows is a very small dataset, and even the Section 13 grid search is quick at that
+size. On Colab the wall-clock time is dominated almost entirely by that first cell
+cloning and installing, typically one to two minutes.
 
 **Scope.** The notebook covers the drug200 dataset **only** — no other dataset is
-loaded, imported or referenced. The supply chain and market analysis lives on the
-other pages of this dashboard rather than being mixed into a clinical notebook.
-
-**Data.** `drug200.csv` is tracked in the repository, so the notebook needs no
-download step and runs on a fresh Colab runtime immediately.
+loaded, imported or referenced anywhere in it. The supply chain and market analysis
+lives on the other pages of this dashboard rather than being mixed into a clinical
+notebook.
 
 **Where the effort went.** Sections 3 and 4 — data quality and cleaning — are the
 largest part of the notebook. The published file is clean, so realistic ingestion
 defects are injected into a copy and the pipeline is required to catch every one.
 That makes the cleaning code testable against known ground truth instead of
-eyeballed.
+eyeballed, and Section 4 closes with a decision log recording what was done to each
+issue and why, before any model is fitted.
+
+**One decision in that log is a decision not to act.** The IQR rule flags 8 extreme
+`Na_to_K` values, and they are kept. Section 5 shows a high sodium-to-potassium ratio
+is the single strongest driver of the label, so those "outliers" are the most
+informative rows in the file — removing them would raise the quality score and delete
+the signal.
 """)
 
 sidebar_about()
